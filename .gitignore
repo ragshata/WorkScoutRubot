@@ -7,7 +7,7 @@ vscode/
 __pycache__/
 *.pyc
 /lyceum/homepage/migrations/
-
+/backend/app.db
 /lyceum/media
 /lyceum/lyceum/static_dev
 __pycache__/
