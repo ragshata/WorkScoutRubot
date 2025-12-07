@@ -30,6 +30,7 @@ export type ExecutorResponseDto = {
     categories: string[];
     budget_label: string; // например "30 000 ₽" или "Договорная"
     dates_label: string; // например "До 20 марта"
+    customer_id: number;
   };
 };
 

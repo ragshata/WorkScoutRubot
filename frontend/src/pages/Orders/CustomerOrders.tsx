@@ -1,142 +1,314 @@
-// src/pages/Orders/CreateOrder.tsx
+// src/pages/Orders/CustomerOrders.tsx
 
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../../components/layout/Page";
-import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
 import BottomSheet from "../../components/ui/BottomSheet";
-import { createOrder, type BudgetType } from "../../api/orders";
-import { getUserFromStorage } from "../../api/users";
+import {
+  type Order,
+  type OrderStatus,
+  getCustomerOrders,
+  deleteOrder,
+  completeOrder,
+  getChatLink,
+  showContacts,
+  type ChatContactsResponse,
+} from "../../api/orders";
+import { createReview } from "../../api/reviews";
 
-const CATEGORIES = [
-  "Отделка",
-  "Сантехника",
-  "Электрика",
-  "Кровля",
-  "Фасад",
-  "Черновые работы",
-  "Окна и двери",
-  "Полы",
-];
+type Tab = "active" | "history";
 
-const steps = [
-  { key: "location", title: "Где и что делать" },
-  { key: "details", title: "Что нужно сделать" },
-  { key: "money", title: "Бюджет, сроки, фото" },
-];
+type ContactsModalState = ChatContactsResponse & {
+  orderTitle: string;
+};
 
-export default function CreateOrder() {
+/* ---------- хелперы форматирования ---------- */
+
+function formatDateShort(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("ru-RU", {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function formatDates(order: Order): string {
+  const f = formatDateShort(order.start_date ?? null);
+  const t = formatDateShort(order.end_date ?? null);
+
+  if (f && t) return `${f} — ${t}`;
+  if (f) return `с ${f}`;
+  if (t) return `до ${t}`;
+  return "Сроки не указаны";
+}
+
+function formatBudget(order: Order): string {
+  if (order.budget_type === "negotiable") return "Договорная";
+
+  if (order.budget_amount != null) {
+    return `${order.budget_amount.toLocaleString("ru-RU")} ₽`;
+  }
+
+  return "Не указано";
+}
+
+function getStatusLabel(s: OrderStatus): string {
+  switch (s) {
+    case "active":
+      return "Активен";
+    case "in_progress":
+      return "В работе";
+    case "done":
+      return "Завершён";
+    case "cancelled":
+    default:
+      return "Отменён";
+  }
+}
+
+function getStatusClass(s: OrderStatus): string {
+  switch (s) {
+    case "active":
+      return "bg-sky-400/20 text-sky-100 border-sky-300/70";
+    case "in_progress":
+      return "bg-amber-400/20 text-amber-100 border-amber-300/70";
+    case "done":
+      return "bg-emerald-400/20 text-emerald-100 border-emerald-300/70";
+    case "cancelled":
+    default:
+      return "bg-rose-400/20 text-rose-100 border-rose-300/70";
+  }
+}
+
+/* ---------- сама страница ---------- */
+
+export default function CustomerOrders() {
   const navigate = useNavigate();
+
   const [animate, setAnimate] = useState(false);
-  const [step, setStep] = useState(0);
+  const [tab, setTab] = useState<Tab>("active");
 
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [budgetMode, setBudgetMode] = useState<BudgetType>("fixed");
-  const [isCategorySheetOpen, setIsCategorySheetOpen] = useState(false);
-
-  const totalSteps = steps.length;
-
-  // поля формы
-  const [city, setCity] = useState<string>("");
-  const [address, setAddress] = useState<string>("");
-  const [objectType, setObjectType] = useState<string>("");
-  const [description, setDescription] = useState<string>("");
-  const [budget, setBudget] = useState<string>("");
-  const [startDate, setStartDate] = useState<string>("");
-  const [endDate, setEndDate] = useState<string>("");
-
-  const [submitting, setSubmitting] = useState(false);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [toast, setToast] = useState<string | null>(null);
+
+  // удаление
+  const [deleteTarget, setDeleteTarget] = useState<Order | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // завершение заказа
+  const [completingId, setCompletingId] = useState<number | null>(null);
+
+  // отзыв заказчика об исполнителе
+  const [reviewTarget, setReviewTarget] = useState<{
+    orderId: number;
+    targetUserId: number;
+    orderTitle: string;
+  } | null>(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewText, setReviewText] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+
+  // контакты
+  const [contactsModal, setContactsModal] =
+    useState<ContactsModalState | null>(null);
 
   useEffect(() => {
     requestAnimationFrame(() => setAnimate(true));
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await getCustomerOrders();
+        if (cancelled) return;
+        setOrders(data);
+      } catch (e: any) {
+        console.error(e);
+        if (!cancelled) {
+          setError(e?.message ?? "Не удалось загрузить ваши заказы");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const toggleCategory = (cat: string) => {
-    setSelectedCategories((prev) =>
-      prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2200);
+  };
+
+  const sortedOrders = useMemo(() => {
+    const withCreated = orders.map((o) => ({
+      ...o,
+      _createdAt: o.created_at ? new Date(o.created_at).getTime() : 0,
+    }));
+
+    return withCreated.sort((a, b) => b._createdAt - a._createdAt);
+  }, [orders]);
+
+  const filtered = useMemo(() => {
+    return sortedOrders.filter((o) =>
+      tab === "active"
+        ? o.status === "active" || o.status === "in_progress"
+        : o.status === "done" || o.status === "cancelled"
     );
+  }, [sortedOrders, tab]);
+
+  const canChat = (order: Order) =>
+    !!order.executor_id &&
+    (order.status === "in_progress" || order.status === "done");
+
+  const canShowContacts = (order: Order) => canChat(order);
+
+  const canComplete = (order: Order) =>
+    order.status === "in_progress" && !!order.executor_id;
+
+  const canLeaveReview = (order: Order) =>
+    order.status === "done" && !!order.executor_id;
+
+  // ----- экшены -----
+
+  const openDeleteConfirm = (order: Order) => {
+    setDeleteTarget(order);
   };
 
-  const handleNext = async () => {
-    setError(null);
-
-    if (step < totalSteps - 1) {
-      setStep((s) => s + 1);
-      return;
-    }
-
-    // финальный шаг — создаём заказ на бэке
-    await handleSubmit();
-  };
-
-  const handlePrev = () => {
-    if (step > 0) setStep((s) => s - 1);
-  };
-
-  const handleSubmit = async () => {
-    // минимальная валидация по ТЗ
-    if (!city.trim()) {
-      setError("Укажи город");
-      setStep(0);
-      return;
-    }
-
-    if (selectedCategories.length === 0) {
-      setError("Выбери хотя бы одну категорию работ");
-      setStep(1);
-      return;
-    }
-
-    if (!description.trim()) {
-      setError("Добавь описание работ");
-      setStep(1);
-      return;
-    }
-
-    const currentUser = getUserFromStorage();
-    if (!currentUser || currentUser.role !== "customer") {
-      setError("Не найден профиль заказчика (нужно заново залогиниться)");
-      return;
-    }
-
-    const numericBudget =
-      budgetMode === "fixed"
-        ? (() => {
-            const cleaned = budget.replace(/[^\d]/g, "");
-            return cleaned ? parseInt(cleaned, 10) : null;
-          })()
-        : null;
-
-    const title =
-      objectType.trim() ||
-      (selectedCategories[0] ?? "").trim() ||
-      "Строительный заказ";
-
-    setSubmitting(true);
+  const handleDeleteConfirmed = async () => {
+    if (!deleteTarget) return;
     try {
-      await createOrder({
-        customer_id: currentUser.id, // фронту удобно, бэк игнорит
-        title,
-        description: description.trim(),
-        city: city.trim(),
-        address: address.trim() || null,
-        categories: selectedCategories,
-        budget_type: budgetMode,
-        budget_amount: numericBudget ?? null,
-        // имена полей должны совпадать с CreateOrderPayload в api/orders.ts
-        date_from: startDate || null,
-        date_to: endDate || null,
-      } as any);
-
-      // после успешного создания — в "Мои заказы"
-      navigate("/customer/orders");
+      setDeleting(true);
+      await deleteOrder(deleteTarget.id);
+      setOrders((prev) => prev.filter((o) => o.id !== deleteTarget.id));
+      showToast("Заказ удалён");
+      setDeleteTarget(null);
     } catch (e: any) {
       console.error(e);
-      setError(e?.message ?? "Не удалось создать заказ");
+      showToast(e?.message ?? "Не удалось удалить заказ");
     } finally {
-      setSubmitting(false);
+      setDeleting(false);
+    }
+  };
+
+  const handleComplete = async (order: Order) => {
+    if (!canComplete(order)) {
+      showToast("Завершить можно только заказ с выбранным исполнителем");
+      return;
+    }
+
+    try {
+      setCompletingId(order.id);
+      const updated = await completeOrder(order.id);
+      setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
+      showToast("Заказ отмечен как завершённый");
+    } catch (e: any) {
+      console.error(e);
+      showToast(e?.message ?? "Не удалось завершить заказ");
+    } finally {
+      setCompletingId(null);
+    }
+  };
+
+  const handleOpenChat = async (order: Order) => {
+    if (!canChat(order)) {
+      showToast("Чат доступен после выбора исполнителя.");
+      return;
+    }
+
+    try {
+      const data = await getChatLink(order.id);
+      if (data?.chat_link) {
+        window.location.href = data.chat_link;
+      } else {
+        showToast("Не удалось получить ссылку на чат");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Не удалось открыть чат");
+    }
+  };
+
+  const handleShowContacts = async (order: Order) => {
+    if (!canShowContacts(order)) {
+      showToast("Контакты доступны после выбора исполнителя.");
+      return;
+    }
+
+    try {
+      const data = await showContacts(order.id);
+      setContactsModal({
+        ...data,
+        orderTitle: order.title,
+      });
+
+      if (!data.both_accepted) {
+        showToast(
+          "Ваше согласие сохранено. Контакты исполнителя появятся после его подтверждения."
+        );
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Не удалось обновить контакты");
+    }
+  };
+
+  const openCustomerReviewForm = (order: Order) => {
+    if (!canLeaveReview(order) || !order.executor_id) return;
+
+    setReviewTarget({
+      orderId: order.id,
+      targetUserId: order.executor_id,
+      orderTitle: order.title,
+    });
+    setReviewRating(5);
+    setReviewText("");
+  };
+
+  const handleCustomerReviewSubmit = async () => {
+    if (!reviewTarget) return;
+
+    const text = reviewText.trim();
+    if (text.length < 3) {
+      showToast(
+        "Добавь чуть более развёрнутый комментарий (минимум 3 символа)"
+      );
+      return;
+    }
+
+    try {
+      setReviewSubmitting(true);
+      await createReview({
+        order_id: reviewTarget.orderId,
+        target_user_id: reviewTarget.targetUserId,
+        rating: reviewRating,
+        text,
+      });
+
+      showToast("Отзыв об исполнителе отправлен на модерацию");
+      setReviewTarget(null);
+      setReviewText("");
+    } catch (e: any) {
+      console.error(e);
+      const msg = String(e?.message ?? "");
+      if (msg.includes("уже оставили отзыв") || msg.includes("уже оставили")) {
+        showToast("Вы уже оставили отзыв по этому заказу");
+        setReviewTarget(null);
+      } else {
+        showToast("Не удалось отправить отзыв");
+      }
+    } finally {
+      setReviewSubmitting(false);
     }
   };
 
@@ -144,444 +316,524 @@ export default function CreateOrder() {
     <Page>
       {/* фон */}
       <div className="absolute inset-0 bg-gradient-to-b from-blue-800 via-blue-900 to-blue-950 z-0" />
-
-      {/* шум */}
       <div
         className="absolute inset-0 z-0 opacity-[0.22]"
         style={{
-          backgroundImage: "url('https://grainy-gradients.vercel.app/noise.png')",
+          backgroundImage:
+            "url('https://grainy-gradients.vercel.app/noise.png')",
           backgroundSize: "220%",
         }}
       />
+      <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[260px] h-[260px] rounded-full bg-cyan-400/25 blur-3xl z-0" />
 
-      {/* свечение */}
-      <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[260px] h-[260px] rounded-full bg-cyan-400/25 blur-3xl z-0" />
+      {/* тосты */}
+      {toast && (
+        <div
+          className="
+            fixed top-3 left-1/2 -translate-x-1/2 z-[80]
+            rounded-2xl px-4 py-2.5
+            bg-slate-900/90 text-white text-[12px]
+            shadow-[0_10px_30px_rgba(0,0,0,0.6)]
+          "
+        >
+          {toast}
+        </div>
+      )}
 
       {/* контент */}
       <div
         className={`
-          relative z-10 flex flex-col px-5 pt-4 pb-8 min-h-screen
+          relative z-10 flex flex-col px-5 pt-4 pb-6 min-h-screen
           text-white
           transition-all duration-600 ease-out
           ${animate ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"}
         `}
       >
-        {/* заголовок + шаги */}
-        <div className="mb-5 max-w-md w-full mx-auto">
-          <div className="flex items-center justify-between mb-2">
+        {/* хедер */}
+        <div className="max-w-md w-full mx-auto mb-4">
+          <div className="flex items-center justify_between mb-2">
             <div>
-              <div className="text-[11px] uppercase tracking-[0.16em] text-blue-200/80">
-                Создание заказа
+              <div className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80">
+                WorkScout · Заказчик
               </div>
-              <h1 className="text-lg font-semibold">{steps[step].title}</h1>
+              <h1 className="text-xl font-semibold">Мои заказы</h1>
             </div>
-            <div className="text-[11px] text-blue-100">
-              Шаг {step + 1} из {totalSteps}
-            </div>
+            <Button
+              className="text-[11px] px-3 py-1.5"
+              onClick={() => navigate("/customer/orders/new")}
+            >
+              + Новый заказ
+            </Button>
           </div>
 
-          {/* прогресс-бар */}
-          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-cyan-400/80"
-              style={{
-                width: `${((step + 1) / totalSteps) * 100}%`,
-              }}
-            />
+          {/* табы */}
+          <div
+            className="
+              mt-3 bg-white/10 border border-white/20 rounded-full
+              p-1 flex text-[12px]
+            "
+          >
+            <button
+              type="button"
+              onClick={() => setTab("active")}
+              className={`
+                flex-1 rounded-full py-1.5
+                transition
+                ${
+                  tab === "active"
+                    ? "bg-white text-blue-900 shadow-[0_0_18px_rgba(255,255,255,0.5)] font-medium"
+                    : "text-blue-100"
+                }
+              `}
+            >
+              Текущие
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("history")}
+              className={`
+                flex-1 rounded-full py-1.5
+                transition
+                ${
+                  tab === "history"
+                    ? "bg-white text-blue-900 shadow-[0_0_18px_rgba(255,255,255,0.5)] font-medium"
+                    : "text-blue-100"
+                }
+              `}
+            >
+              История
+            </button>
           </div>
         </div>
 
-        {/* Шаги */}
-        <div className="flex-1 max-w-md w-full mx-auto flex flex-col gap-5 mt-2">
-          {/* Шаг 1 — локация */}
-          {step === 0 && (
-            <section
+        {/* список заказов */}
+        <div className="flex-1 max-w-md w-full mx-auto space-y-3 pb-4">
+          {loading && orders.length === 0 && (
+            <div
               className="
-                rounded-3xl bg-white/12 border border-white/25
-                backdrop-blur-2xl p-5
-                shadow-[0_0_30px_rgba(0,0,0,0.35)]
-                space-y-4
+                mt-6 rounded-3xl bg-white/10 border border-white/15
+                backdrop-blur-2xl px-4 py-6 text-center text-sm text-blue-100
               "
             >
-              <p className="text-[11px] text-blue-100">
-                Укажите город и адрес — так мы покажем заказ только подходящим исполнителям.
-              </p>
-
-              <Input
-                label="Город"
-                placeholder="Например: Москва"
-                value={city}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setCity(e.target.value)
-                }
-              />
-              <Input
-                label="Адрес"
-                placeholder="Улица, дом, подъезд (если нужно)"
-                value={address}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setAddress(e.target.value)
-                }
-              />
-              <Input
-                label="Тип объекта"
-                placeholder="Квартира, дом, офис и т.п."
-                value={objectType}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setObjectType(e.target.value)
-                }
-              />
-            </section>
+              Загружаем ваши заказы...
+            </div>
           )}
 
-          {/* Шаг 2 — категории + описание */}
-          {step === 1 && (
-            <>
-              <section
-                className="
-                  rounded-3xl bg-white/12 border border-white/25
-                  backdrop-blur-2xl p-5
-                  shadow-[0_0_30px_rgba(0,0,0,0.35)]
-                  space-y-3
-                "
-              >
-                <div className="flex items-center justify_between mb-1">
-                  <div className="text-sm font-semibold">Категории работ</div>
-                  <div className="text-[10px] text-blue-100">
-                    Можно выбрать несколько
-                  </div>
-                </div>
-
-                {/* кнопка: открывает bottom sheet как в регистрации */}
-                <button
-                  type="button"
-                  onClick={() => setIsCategorySheetOpen(true)}
-                  className="
-                    w-full rounded-2xl px-4 py-3
-                    bg-white/10 border border-white/25
-                    text-[12px] text-blue-50
-                    flex items-center justify-between
-                    active:scale-[0.97] transition
-                  "
-                >
-                  <span>
-                    {selectedCategories.length === 0
-                      ? "Выбрать категории работ"
-                      : `Выбрано: ${selectedCategories.length}`}
-                  </span>
-                  <span className="text-[16px]">▾</span>
-                </button>
-
-                {selectedCategories.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-3">
-                    {selectedCategories.map((cat) => (
-                      <span
-                        key={cat}
-                        className="
-                          px-2.5 py-1 rounded-full text-[10px]
-                          bg-cyan-500/25 border border-cyan-400/60
-                          text-white
-                        "
-                      >
-                        {cat}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <section
-                className="
-                  rounded-3xl bg-white/10 border border-white/20
-                  backdrop-blur-2xl p-5
-                  shadow-[0_0_26px_rgба(0,0,0,0.3)]
-                  space-y-3
-                "
-              >
-                <div className="text-sm font-semibold">Описание работ</div>
-                <p className="text-[11px] text-blue-100">
-                  Коротко опишите, что нужно сделать, в каком объёме и какие есть нюансы.
-                </p>
-
-                <textarea
-                  className="
-                    mt-1 w-full min-h-[110px] rounded-2xl
-                    bg-black/10 border border-white/20
-                    px-3 py-2 text-[13px] text-white
-                    placeholder:text-blue-200/70
-                    outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/60
-                  "
-                  value={description}
-                  onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
-                    setDescription(e.target.value)
-                  }
-                  placeholder="Например: нужно выровнять стены под покраску в комнате 18 м², демонтировать старые обои..."
-                />
-              </section>
-            </>
-          )}
-
-          {/* Шаг 3 — деньги, сроки, фото */}
-          {step === 2 && (
-            <>
-              <section
-                className="
-                  rounded-3xl bg_white/12 border border-white/25
-                  backdrop-blur-2xl p-5
-                  shadow-[0_0_30px_rgба(0,0,0,0.35)]
-                  space-y-3
-                "
-              >
-                <div className="text-sm font-semibold mb-1">Бюджет</div>
-
-                <div className="flex gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setBudgetMode("fixed")}
-                    className={`
-                      flex-1 px-3 py-2 rounded-2xl text-[11px]
-                      border backdrop-blur-xl
-                      transition-all active:scale-[0.97]
-                      ${
-                        budgetMode === "fixed"
-                          ? "bg-white/20 border-white text-white"
-                          : "bg-white/5 border-white/20 text-blue-100"
-                      }
-                    `}
-                  >
-                    Фиксированная сумма
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBudgetMode("negotiable")}
-                    className={`
-                      flex-1 px-3 py-2 rounded-2xl text-[11px]
-                      border backdrop-blur-xl
-                      transition-all active:scale-[0.97]
-                      ${
-                        budgetMode === "negotiable"
-                          ? "bg-white/20 border-white text-white"
-                          : "bg-white/5 border-white/20 text-blue-100"
-                      }
-                    `}
-                  >
-                    Договорная
-                  </button>
-                </div>
-
-                {budgetMode === "fixed" ? (
-                  <Input
-                    label="Сумма"
-                    placeholder="Например: 30 000 ₽"
-                    value={budget}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setBudget(e.target.value)
-                    }
-                  />
-                ) : (
-                  <p className="text-[11px] text-blue-100">
-                    Бюджет договорной — исполнители предложат свою цену в откликах.
-                  </p>
-                )}
-              </section>
-
-              <section
-                className="
-                  rounded-3xl bg-white/10 border border-white/20
-                  backdrop-blur-2xl p-5
-                  shadow-[0_0_26px_rgba(0,0,0,0.3)]
-                  space-y-3
-                "
-              >
-                <div className="text-sm font-semibold">Сроки</div>
-                <p className="text-[11px] text-blue-100">
-                  Можно указать примерные даты — это поможет отфильтровать неподходящие отклики.
-                </p>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Input
-                    label="Начать с"
-                    type="date"
-                    value={startDate}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setStartDate(e.target.value)
-                    }
-                  />
-                  <Input
-                    label="Завершить до"
-                    type="date"
-                    value={endDate}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setEndDate(e.target.value)
-                    }
-                  />
-                </div>
-              </section>
-
-              <section
-                className="
-                  rounded-3xl bg-white/6 border border-white/15
-                  backdrop-blur-2xl p-5
-                  shadow-[0_0_20px_rgба(0,0,0,0.25)]
-                  space-y-3
-                "
-              >
-                <div className="text-sm font-semibold">Фото (необязательно)</div>
-                <p className="text-[11px] text-blue-100 mb-2">
-                  Добавьте 1–3 фото, чтобы исполнители лучше понимали объём и состояние объекта.
-                </p>
-
-                <label
-                  htmlFor="photos"
-                  className="
-                    mt-1 w-full rounded-2xl border border-dashed border-white/35
-                    bg-white/5 px-4 py-6
-                    flex flex-col items-center justify-center
-                    text-[11px] text-blue-100
-                    cursor-pointer
-                    hover:bg-white/10 transition
-                  "
-                >
-                  <div className="text-3xl mb-1">📷</div>
-                  <div>Нажмите, чтобы выбрать фото</div>
-                  <div className="text-[10px] text-blue-200/80 mt-1">
-                    Поддерживаются изображения · можно добавить позже
-                  </div>
-                </label>
-                <input
-                  id="photos"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                />
-              </section>
-            </>
-          )}
-
-          {/* Ошибка */}
-          {error && (
-            <div className="text-center text-red-200 text-xs mt-1">
+          {error && !loading && (
+            <div
+              className="
+                mt-4 rounded-2xl bg-red-500/15 border border-red-400/70
+                px-4 py-3 text-[12px] text-red-50
+              "
+            >
               {error}
             </div>
           )}
 
-          {/* нижняя панель управления шагами */}
-          <div className="mt-6 sticky bottom-4 left-0 right-0">
-            {step === 0 ? (
-              // на первом шаге — только большая кнопка "Дальше"
-              <div
-                className="
-                  rounded-2xl bg-blue-950/85 border border-white/15
-                  backdrop-blur-2xl px-4 py-3
-                "
-              >
-                <Button
-                  className="w-full text-[13px]"
-                  onClick={handleNext}
-                  disabled={submitting}
-                >
-                  {submitting ? "Сохраняю..." : "Дальше"}
-                </Button>
-              </div>
-            ) : (
-              // дальше — Назад + Дальше / Опубликовать
-              <div
-                className="
-                  rounded-2xl bg-blue-950/85 border border-white/15
-                  backdrop-blur-2xl px-4 py-3
-                  flex items-center gap-3
-                "
-              >
-                <button
-                  type="button"
-                  onClick={handlePrev}
-                  className="
-                    px-4 py-2 rounded-xl text-[12px]
-                    bg-white/5 border border-white/20
-                    text-blue-100
-                    active:scale-[0.97] transition
-                  "
-                  disabled={submitting}
-                >
-                  Назад
-                </button>
+          {!loading && !error && filtered.length === 0 && (
+            <div
+              className="
+                mt-6 rounded-3xl bg-white/10 border border-white/15
+                backdrop-blur-2xl px-4 py-6 text-center text-sm text-blue-100
+              "
+            >
+              В этом разделе пока пусто. Создайте заказ — он появится здесь.
+            </div>
+          )}
 
-                <Button
-                  className="flex-1 text-[13px]"
-                  onClick={handleNext}
-                  disabled={submitting}
+          {!loading &&
+            filtered.map((order) => {
+              const statusLabel = getStatusLabel(order.status);
+              const statusClasses = getStatusClass(order.status);
+
+              const showDelete =
+                order.status === "active" || order.status === "cancelled";
+
+              return (
+                <article
+                  key={order.id}
+                  className="
+                    rounded-3xl bg-white/12 border border-white/20
+                    backdrop-blur-2xl p-4
+                    shadow-[0_0_30px_rgba(0,0,0,0.45)]
+                    flex flex-col gap-3
+                  "
                 >
-                  {submitting
-                    ? "Публикую..."
-                    : step === totalSteps - 1
-                    ? "Опубликовать заказ"
-                    : "Дальше"}
-                </Button>
-              </div>
-            )}
-          </div>
+                  {/* верх: категории + статус */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {(order.categories ?? []).map((cat) => (
+                        <span
+                          key={cat}
+                          className="
+                            px-2.5 py-1 rounded-full text-[10px]
+                            bg-cyan-500/25 border border-cyan-300/70
+                            text-white
+                          "
+                        >
+                          {cat}
+                        </span>
+                      ))}
+                    </div>
+                    <span
+                      className={`
+                        px-2.5 py-1 rounded-full text-[10px] border
+                        ${statusClasses}
+                      `}
+                    >
+                      {statusLabel}
+                    </span>
+                  </div>
+
+                  {/* заголовок + адрес */}
+                  <div>
+                    <div className="text-sm font-semibold mb-1">
+                      {order.title}
+                    </div>
+                    <div className="text-[11px] text-blue-100">
+                      {order.city}
+                      {order.address ? ` · ${order.address}` : ""}
+                    </div>
+                  </div>
+
+                  {/* бюджет + сроки */}
+                  <div className="grid grid-cols-2 gap-3 text-[11px]">
+                    <div>
+                      <div className="text-blue-200/80">Бюджет</div>
+                      <div className="text-white font-medium">
+                        {formatBudget(order)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-blue-200/80">Сроки</div>
+                      <div className="text-blue-50">
+                        {formatDates(order)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* описание */}
+                  {order.description && (
+                    <p className="text-[12px] text-blue-100 leading-snug">
+                      {order.description}
+                    </p>
+                  )}
+
+                  {/* кнопки */}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {canChat(order) && (
+                      <Button
+                        className="flex-1 min-w-[120px] text-[13px] py-2.5"
+                        onClick={() => handleOpenChat(order)}
+                      >
+                        Перейти в чат
+                      </Button>
+                    )}
+
+                    {canShowContacts(order) && (
+                      <button
+                        type="button"
+                        onClick={() => handleShowContacts(order)}
+                        className="
+                          flex-1 min-w-[120px] px-3 py-2.5 rounded-2xl text-[12px]
+                          bg-white/6 border border-cyan-300/70
+                          text-cyan-50 active:scale-[0.97] transition
+                        "
+                      >
+                        Показать контакты
+                      </button>
+                    )}
+
+                    {canComplete(order) && (
+                      <button
+                        type="button"
+                        onClick={() => handleComplete(order)}
+                        disabled={completingId === order.id}
+                        className="
+                          flex-1 min-w-[140px] px-3 py-2.5 rounded-2xl text-[12px]
+                          bg-emerald-400 text-emerald-950
+                          active:scale-[0.97] transition
+                          disabled:opacity-60 disabled:cursor-not-allowed
+                        "
+                      >
+                        {completingId === order.id
+                          ? "Завершаем..."
+                          : "Завершить заказ"}
+                      </button>
+                    )}
+
+                    {canLeaveReview(order) && (
+                      <button
+                        type="button"
+                        onClick={() => openCustomerReviewForm(order)}
+                        className="
+                          flex-1 min-w-[160px] px-3 py-2.5 rounded-2xl text-[12px]
+                          bg-white/8 border border-white/30
+                          text-blue-50 active:scale-[0.97] transition
+                        "
+                      >
+                        Оставить отзыв об исполнителе
+                      </button>
+                    )}
+
+                    {showDelete && (
+                      <button
+                        type="button"
+                        onClick={() => openDeleteConfirm(order)}
+                        className="
+                          flex-1 min-w-[120px] px-3 py-2.5 rounded-2xl text-[12px]
+                          bg-white/4 border border-rose-300/70
+                          text-rose-100 active:scale-[0.97] transition
+                        "
+                      >
+                        Удалить заказ
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
         </div>
       </div>
 
-      {/* BottomSheet для категорий — как при регистрации */}
+      {/* bottom-sheet удаления */}
       <BottomSheet
-        open={isCategorySheetOpen}
-        onClose={() => setIsCategorySheetOpen(false)}
+        open={!!deleteTarget}
+        onClose={() => !deleting && setDeleteTarget(null)}
       >
-        <div className="pt-3 pb-6 px-5">
-          {/* хэндл сверху, чтобы не казалось приплюснутым */}
-          <div className="w-10 h-1 rounded-full bg-white/30 mx-auto mb-4" />
-
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <div className="text-sm font-semibold text-white">
-                Категории работ
-              </div>
-              <div className="text-[11px] text-blue-100">
-                Можно выбрать несколько специализаций
-              </div>
-            </div>
-            {selectedCategories.length > 0 && (
-              <div className="text-[11px] text-blue-100">
-                Выбрано: {selectedCategories.length}
-              </div>
-            )}
+        <div className="px-4 pt-3 pb-5 text-white">
+          <div className="w-10 h-1 rounded-full bg-white/40 mx-auto mb-3" />
+          <div className="text-[14px] font-semibold mb-2">
+            Удалить заказ?
           </div>
+          <p className="text-[12px] text-blue-100 mb-4">
+            {deleteTarget?.title}
+          </p>
+          <p className="text-[11px] text-blue-200/80 mb-4">
+            Заказ будет скрыт из списка. Исполнители больше не увидят его в
+            ленте.
+          </p>
 
-          <div className="flex flex-wrap gap-2 mb-5">
-            {CATEGORIES.map((cat) => {
-              const active = selectedCategories.includes(cat);
-              return (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => toggleCategory(cat)}
-                  className={`
-                    px-3 py-1.5 rounded-full text-[11px]
-                    border backdrop-blur-xl
-                    transition-all duration-150 active:scale-[0.97]
-                    ${
-                      active
-                        ? "bg-cyan-500/30 border-cyan-400 text-white"
-                        : "bg-white/5 border-white/20 text-blue-100"
-                    }
-                  `}
-                >
-                  {cat}
-                </button>
-              );
-            })}
+          <div className="flex gap-3">
+            <Button
+              className="flex-1 text-[13px]"
+              onClick={handleDeleteConfirmed}
+              disabled={deleting}
+            >
+              {deleting ? "Удаляем..." : "Удалить"}
+            </Button>
+            <button
+              type="button"
+              onClick={() => !deleting && setDeleteTarget(null)}
+              className="
+                px-4 py-2 rounded-2xl text-[12px]
+                bg-white/5 border border-white/20
+                text-blue-100 active:scale-[0.97] transition
+              "
+              disabled={deleting}
+            >
+              Отмена
+            </button>
           </div>
-
-          <Button
-            className="w-full text-[13px]"
-            onClick={() => setIsCategorySheetOpen(false)}
-          >
-            Готово
-          </Button>
         </div>
       </BottomSheet>
+
+      {/* модалка отзыва заказчика об исполнителе */}
+      {reviewTarget && (
+        <>
+          <div
+            className="fixed inset-0 z-[95] bg-black/50 backdrop-blur-md"
+            onClick={() => !reviewSubmitting && setReviewTarget(null)}
+          />
+          <div className="fixed inset-0 z-[96] flex items-center justify-center px-4 pointer-events-none">
+            <div
+              className="
+                pointer-events-auto w-full max-w-md
+                rounded-3xl border border-white/20
+                bg-gradient-to-b from-slate-950 via-blue-950 to-slate-950
+                shadow-[0_18px_50px_rgba(0,0,0,0.9)]
+                px-5 pt-4 pb-5
+                text-white
+              "
+            >
+              <div className="w-10 h-1 rounded-full bg-white/30 mx-auto mb-3" />
+
+              <div className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80 mb-1">
+                Отзыв об исполнителе
+              </div>
+              <div className="text-[15px] font-semibold mb-3 leading-snug">
+                {reviewTarget.orderTitle}
+              </div>
+
+              <div className="mb-2 text-[11px] text-blue-200/90">
+                Оцените работу исполнителя и оставьте короткий комментарий.
+                Отзыв увидит админ перед публикацией.
+              </div>
+
+              <div className="flex gap-1.5 mb-3">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    className={`
+                      text-[20px] leading-none
+                      ${
+                        star <= reviewRating
+                          ? "text-yellow-400"
+                          : "text-slate-600"
+                      }
+                    `}
+                    onClick={() => setReviewRating(star)}
+                    disabled={reviewSubmitting}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                className="
+                  w-full rounded-2xl bg-black/30 border border-white/15
+                  px-3 py-2 text-[13px] text-white
+                  placeholder:text-blue-200/70
+                  outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/60
+                "
+                rows={3}
+                placeholder="Например: всё сделал аккуратно, был на связи, уложился в сроки..."
+                value={reviewText}
+                onChange={(e) => setReviewText(e.target.value)}
+                disabled={reviewSubmitting}
+              />
+
+              <div className="flex gap-3 mt-4">
+                <Button
+                  className="flex-1 text-[13px]"
+                  onClick={handleCustomerReviewSubmit}
+                  disabled={reviewSubmitting}
+                >
+                  {reviewSubmitting ? "Отправляю..." : "Отправить отзыв"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => !reviewSubmitting && setReviewTarget(null)}
+                  className="
+                    px-4 py-2 rounded-2xl text-[12px]
+                    bg-white/5 border border-white/20
+                    text-blue-100 active:scale-[0.97] transition
+                  "
+                  disabled={reviewSubmitting}
+                >
+                  Отмена
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* модалка контактов (заказчик ↔ исполнитель) */}
+      {contactsModal && (
+        <>
+          <div
+            className="fixed inset-0 z-[95] bg-black/50 backdrop-blur-md"
+            onClick={() => setContactsModal(null)}
+          />
+          <div className="fixed inset-0 z-[96] flex items-center justify-center px-4 pointer-events-none">
+            <div
+              className="
+                pointer-events-auto w-full max-w-md
+                rounded-3xl border border-white/20
+                bg-gradient-to-b from-slate-950 via-blue-950 to-slate-950
+                shadow-[0_18px_50px_rgba(0,0,0,0.9)]
+                px-5 pt-4 pb-5
+                text-white
+              "
+            >
+              <div className="w-10 h-1 rounded-full bg-white/30 mx-auto mb-3" />
+              <div className="text-[11px] uppercase tracking-[0.18em] text-blue-200/80 mb-1">
+                Контакты по заказу
+              </div>
+              <div className="text-[14px] font-semibold mb-3">
+                {contactsModal.orderTitle}
+              </div>
+
+              {!contactsModal.both_accepted && (
+                <div className="mb-3 text-[12px] text-amber-100 bg-amber-500/10 border border-amber-400/60 rounded-2xl px-3 py-2">
+                  Вы согласились показать свои контакты. Контакты исполнителя
+                  появятся после его подтверждения.
+                </div>
+              )}
+
+              {contactsModal.both_accepted && (
+                <div className="mb-3 text-[12px] text-blue-100 bg-white/5 border border-white/15 rounded-2xl px-3 py-2">
+                  Обе стороны согласились показать контакты. Можно общаться
+                  напрямую.
+                </div>
+              )}
+
+              <div className="space-y-3 text-[12px]">
+                <div className="rounded-2xl bg-white/5 border border-white/15 px-3 py-2.5">
+                  <div className="text-[11px] text-blue-200/80 mb-1">
+                    Вы (заказчик)
+                  </div>
+                  <div className="font-medium">
+                    {contactsModal.customer
+                      ? `${contactsModal.customer.first_name} ${
+                          contactsModal.customer.last_name ?? ""
+                        }`.trim()
+                      : "—"}
+                  </div>
+                  <div className="text-blue-100 mt-0.5">
+                    Телефон:{" "}
+                    {contactsModal.customer?.phone
+                      ? contactsModal.customer.phone
+                      : "—"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-white/5 border border-white/15 px-3 py-2.5">
+                  <div className="text-[11px] text-blue-200/80 mb-1">
+                    Исполнитель
+                  </div>
+                  <div className="font-medium">
+                    {contactsModal.executor
+                      ? `${contactsModal.executor.first_name} ${
+                          contactsModal.executor.last_name ?? ""
+                        }`.trim()
+                      : "—"}
+                  </div>
+                  <div className="text-blue-100 mt-0.5">
+                    Телефон:{" "}
+                    {contactsModal.executor?.phone
+                      ? contactsModal.executor.phone
+                      : "—"}
+                  </div>
+                  {contactsModal.executor?.telegram_id && (
+                    <a
+                      href={`tg://user?id=${contactsModal.executor.telegram_id}`}
+                      className="inline-block mt-1 text-[12px] text-cyan-300 underline"
+                    >
+                      Написать в Telegram
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setContactsModal(null)}
+                className="
+                  mt-4 w-full px-4 py-2.5 rounded-2xl text-[13px]
+                  bg-white/10 border border-white/20
+                  text-blue-50 active:scale-[0.97] transition
+                "
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </Page>
   );
 }

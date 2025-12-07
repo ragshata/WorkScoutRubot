@@ -12,6 +12,7 @@ import CustomerOrders from "../pages/Orders/CustomerOrders";
 import ExecutorOrders from "../pages/Orders/ExecutorOrders";
 import ExecutorResponses from "../pages/Responses/ExecutorResponses";
 import AdminDashboard from "../pages/Admin/AdminDashboard";
+import BlockedPage from "../pages/Auth/Blocked";
 
 export default function AppRoutes() {
   return (
@@ -33,6 +34,7 @@ export default function AppRoutes() {
       <Route path="/executor/orders" element={<ExecutorOrders />} />
       <Route path="/executor/responses" element={<ExecutorResponses />} />
       <Route path="/admin" element={<AdminDashboard />} />
+      <Route path="/blocked" element={<BlockedPage />} />
 
 
 

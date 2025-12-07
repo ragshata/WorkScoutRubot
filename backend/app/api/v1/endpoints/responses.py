@@ -197,6 +197,7 @@ def response_to_executor_dto(resp: Response) -> ExecutorResponseDto:
             categories=str_to_list(order.categories_raw),
             budget_label=_format_budget_label(order),
             dates_label=_format_dates_label(order),
+            customer_id=order.customer_id,
         ),
     )
 

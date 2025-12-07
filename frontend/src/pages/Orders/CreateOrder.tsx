@@ -1,3 +1,5 @@
+// src/pages/Orders/CreateOrder.tsx
+
 import { useEffect, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../../components/layout/Page";
@@ -36,13 +38,13 @@ export default function CreateOrder() {
   const totalSteps = steps.length;
 
   // поля формы
-  const [city, setCity] = useState("");
-  const [address, setAddress] = useState("");
-  const [objectType, setObjectType] = useState("");
-  const [description, setDescription] = useState("");
-  const [budget, setBudget] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [city, setCity] = useState<string>("");
+  const [address, setAddress] = useState<string>("");
+  const [objectType, setObjectType] = useState<string>("");
+  const [description, setDescription] = useState<string>("");
+  const [budget, setBudget] = useState<string>("");
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,13 +111,13 @@ export default function CreateOrder() {
 
     const title =
       objectType.trim() ||
-      selectedCategories[0] ||
+      (selectedCategories[0] ?? "").trim() ||
       "Строительный заказ";
 
     setSubmitting(true);
     try {
       await createOrder({
-        customer_id: currentUser.id,
+        customer_id: currentUser.id, // фронту удобно, бэк игнорит
         title,
         description: description.trim(),
         city: city.trim(),
@@ -123,16 +125,16 @@ export default function CreateOrder() {
         categories: selectedCategories,
         budget_type: budgetMode,
         budget_amount: numericBudget ?? null,
-        // ⬇️ тут главное изменение — используем date_from / date_to
+        // имена полей должны совпадать с CreateOrderPayload в api/orders.ts
         date_from: startDate || null,
         date_to: endDate || null,
-      });
+      } as any);
 
       // после успешного создания — в "Мои заказы"
       navigate("/customer/orders");
     } catch (e: any) {
       console.error(e);
-      setError(e.message ?? "Не удалось создать заказ");
+      setError(e?.message ?? "Не удалось создать заказ");
     } finally {
       setSubmitting(false);
     }
@@ -202,26 +204,33 @@ export default function CreateOrder() {
               "
             >
               <p className="text-[11px] text-blue-100">
-                Укажите город и адрес — так мы покажем заказ только подходящим исполнителям.
+                Укажите город и адрес — так мы покажем заказ только
+                подходящим исполнителям.
               </p>
 
               <Input
                 label="Город"
                 placeholder="Например: Москва"
                 value={city}
-                onChange={setCity}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setCity(e.target.value)
+                }
               />
               <Input
                 label="Адрес"
                 placeholder="Улица, дом, подъезд (если нужно)"
                 value={address}
-                onChange={setAddress}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setAddress(e.target.value)
+                }
               />
               <Input
                 label="Тип объекта"
                 placeholder="Квартира, дом, офис и т.п."
                 value={objectType}
-                onChange={setObjectType}
+                onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                  setObjectType(e.target.value)
+                }
               />
             </section>
           )}
@@ -292,7 +301,8 @@ export default function CreateOrder() {
               >
                 <div className="text-sm font-semibold">Описание работ</div>
                 <p className="text-[11px] text-blue-100">
-                  Коротко опишите, что нужно сделать, в каком объёме и какие есть нюансы.
+                  Коротко опишите, что нужно сделать, в каком объёме
+                  и какие есть нюансы.
                 </p>
 
                 <textarea
@@ -366,11 +376,14 @@ export default function CreateOrder() {
                     label="Сумма"
                     placeholder="Например: 30 000 ₽"
                     value={budget}
-                    onChange={setBudget}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setBudget(e.target.value)
+                    }
                   />
                 ) : (
                   <p className="text-[11px] text-blue-100">
-                    Бюджет договорной — исполнители предложат свою цену в откликах.
+                    Бюджет договорной — исполнители предложат свою цену
+                    в откликах.
                   </p>
                 )}
               </section>
@@ -385,7 +398,8 @@ export default function CreateOrder() {
               >
                 <div className="text-sm font-semibold">Сроки</div>
                 <p className="text-[11px] text-blue-100">
-                  Можно указать примерные даты — это поможет отфильтровать неподходящие отклики.
+                  Можно указать примерные даты — это поможет отфильтровать
+                  неподходящие отклики.
                 </p>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -393,13 +407,17 @@ export default function CreateOrder() {
                     label="Начать с"
                     type="date"
                     value={startDate}
-                    onChange={setStartDate}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setStartDate(e.target.value)
+                    }
                   />
                   <Input
                     label="Завершить до"
                     type="date"
                     value={endDate}
-                    onChange={setEndDate}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setEndDate(e.target.value)
+                    }
                   />
                 </div>
               </section>
@@ -414,7 +432,8 @@ export default function CreateOrder() {
               >
                 <div className="text-sm font-semibold">Фото (необязательно)</div>
                 <p className="text-[11px] text-blue-100 mb-2">
-                  Добавьте 1–3 фото, чтобы исполнители лучше понимали объём и состояние объекта.
+                  Добавьте 1–3 фото, чтобы исполнители лучше понимали
+                  объём и состояние объекта.
                 </p>
 
                 <label
@@ -549,7 +568,7 @@ export default function CreateOrder() {
                     transition-all duration-150 active:scale-[0.97]
                     ${
                       active
-                        ? "bg-cyan-500/30 border-cyan-400 text-white shadow-[0_0_18px_rgba(34,211,238,0.6)]"
+                        ? "bg-cyan-500/30 border-cyan-400 text-white"
                         : "bg-white/5 border-white/20 text-blue-100"
                     }
                   `}

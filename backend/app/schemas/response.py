@@ -23,6 +23,7 @@ class ExecutorResponseOrder(BaseModel):
     categories: List[str]
     budget_label: str
     dates_label: str
+    customer_id: int
 
 
 class ExecutorResponseDto(BaseModel):

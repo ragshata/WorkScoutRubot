@@ -34,11 +34,15 @@ export async function adminSetUserBlocked(
   userId: number,
   is_blocked: boolean
 ): Promise<AdminUser> {
-  return apiFetch(`/admin/users/${userId}`, {
+  // если is_blocked === true -> вызываем /block
+  // если is_blocked === false -> вызываем /unblock
+  const action = is_blocked ? "block" : "unblock";
+
+  return apiFetch(`/admin/users/${userId}/${action}`, {
     method: "PATCH",
-    body: JSON.stringify({ is_blocked }),
   });
 }
+
 
 // ==== Админ: заказы ==== //
 
