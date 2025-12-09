@@ -3,6 +3,10 @@
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 
+// куда гнать гостя на выбор роли
+const ROLE_ROUTE = "/role";
+const BLOCKED_ROUTE = "/blocked";
+
 /**
  * Базовый helper для запросов к API.
  * - Автоматически подставляет X-User-Id из localStorage ("rp_user")
@@ -16,7 +20,7 @@ export async function apiFetch<T = any>(
   // ----- заголовки -----
   const headers = new Headers(options.headers || {});
 
-  // Content-Type по умолчанию только если не FormData и не задан руками
+  // Content-Type по умолчанию, если это не FormData и не задан руками
   const isFormData = options.body instanceof FormData;
   if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -68,6 +72,12 @@ export async function apiFetch<T = any>(
     }
   };
 
+  const redirectSafe = (to: string) => {
+    if (window.location.pathname !== to) {
+      window.location.href = to;
+    }
+  };
+
   // ----- обработка ошибок -----
   if (!res.ok) {
     await readBodyOnce();
@@ -76,15 +86,39 @@ export async function apiFetch<T = any>(
       (data && typeof data.detail === "string" && data.detail) ||
       (rawText || undefined);
 
-    // 401 — не авторизован
+    // 401 — не авторизован / юзер не найден
     if (res.status === 401) {
+      const code = typeof data?.detail === "string" ? data.detail : "";
+
+      // backend: get_current_user → "USER_NOT_AUTHENTICATED"
+      if (code === "USER_NOT_AUTHENTICATED") {
+        try {
+          localStorage.removeItem("rp_user");
+        } catch {
+          /* ignore */
+        }
+        redirectSafe(ROLE_ROUTE);
+        throw new Error("Не авторизован");
+      }
+
+      // backend: get_current_user → "USER_NOT_FOUND"
+      if (code === "USER_NOT_FOUND") {
+        try {
+          localStorage.removeItem("rp_user");
+        } catch {
+          /* ignore */
+        }
+        redirectSafe(ROLE_ROUTE);
+        throw new Error("Пользователь не найден");
+      }
+
+      // fallback: любой другой 401 — тоже чистим и шлём на выбор роли
       try {
         localStorage.removeItem("rp_user");
       } catch {
         /* ignore */
       }
-      // можно поправить на свой роут логина/онбординга
-      window.location.href = "/";
+      redirectSafe(ROLE_ROUTE);
       throw new Error(detail || "Не авторизован");
     }
 
@@ -100,7 +134,7 @@ export async function apiFetch<T = any>(
         } catch {
           /* ignore */
         }
-        window.location.href = "/blocked";
+        redirectSafe(BLOCKED_ROUTE);
         throw new Error(detail || "Пользователь заблокирован");
       }
 
