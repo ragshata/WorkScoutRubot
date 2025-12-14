@@ -1,7 +1,6 @@
 # bot/main.py
 
 import os
-import asyncio
 from typing import Final
 
 from telegram import (
@@ -40,7 +39,6 @@ def build_webapp_button() -> InlineKeyboardMarkup:
         url = f"https://t.me/{TELEGRAM_BOT_USERNAME}/app"
 
     if not url:
-        # крайний случай — просто ссылка-заглушка, чтобы не падать
         url = "https://t.me"
 
     keyboard = [
@@ -55,9 +53,7 @@ def build_webapp_button() -> InlineKeyboardMarkup:
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    /start — приветствие + кнопка открытия WebApp.
-    """
+    """ /start — приветствие + кнопка открытия WebApp. """
     keyboard = build_webapp_button()
     await update.message.reply_text(
         START_TEXT,
@@ -72,18 +68,15 @@ def build_application() -> Application:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в окружении")
 
     app = Application.builder().token(token).build()
-
-    # /start
     app.add_handler(CommandHandler("start", start_command))
-
     return app
 
 
-async def main() -> None:
+def main() -> None:
     app = build_application()
-    # запускаем long polling
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # run_polling сам управляет event loop, его НЕ await'ят
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
