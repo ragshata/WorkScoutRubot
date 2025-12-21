@@ -1,5 +1,5 @@
 // src/api/auth.ts
-
+import WebApp from "@twa-dev/sdk";
 import { API_BASE_URL } from "./http";
 import type { User, UserRole } from "./users";
 
@@ -12,24 +12,31 @@ export interface RegisterPayload {
   city?: string;
   experience_years?: number | null;
 
-  // здесь тоже массив
   specializations?: string[] | null;
-
   portfolio_photos?: string[] | null;
 
-  // доп. поля из схемы
   about?: string | null;
   about_orders?: string | null;
 }
 
 /**
  * Регистрация пользователя.
- * Специально отдельный fetch, чтобы чуть по-особенному обработать ошибки.
+ * Теперь отправляем X-Tg-Init-Data (подписанная строка Telegram).
  */
 export async function registerUser(payload: RegisterPayload): Promise<User> {
+  const initData = WebApp.initData || "";
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (initData) {
+    headers["X-Tg-Init-Data"] = initData;
+  }
+
   const res = await fetch(`${API_BASE_URL}/auth/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
 

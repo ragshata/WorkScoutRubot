@@ -49,50 +49,33 @@ def create_order(
     db.refresh(order)
     return _order_to_out(order)
 
-
 @router.get("/available", response_model=List[AvailableOrderDto])
 def get_available_orders(
     city: Optional[str] = Query(default=None),
-    categories: Optional[str] = Query(
-        default=None, description="Строка категорий через запятую"
-    ),
+    categories: Optional[str] = Query(default=None, description="Строка категорий через запятую"),
     fresh_only: bool = Query(default=False),
     show_all: bool = Query(
         default=False,
-        description=(
-            "Если true — не применять автофильтры по городу и "
-            "специализациям исполнителя"
-        ),
+        description="Если true — не применять автофильтры по городу и специализациям исполнителя",
     ),
     db: Session = Depends(get_db),
-    x_user_id: Optional[int] = Header(
-        default=None,
-        alias="X-User-Id",
-    ),
+    current: User = Depends(require_role("executor")),
 ):
     """
     Лента доступных заказов для исполнителя.
-
-    Специально без require_role/get_current_user, чтобы:
-    - не ловить 403 от общих зависимостей;
-    - использовать только X-User-Id для определения текущего юзера.
+    Текущий пользователь определяется строго через Telegram initData (X-Tg-Init-Data).
     """
-
-    current: Optional[User] = None
-    if x_user_id is not None:
-        current = db.query(User).filter(User.id == x_user_id).first()
 
     # --- Базовый запрос: активные заказы ---
     q = db.query(Order).filter(Order.status == "active")
 
-    # Если знаем пользователя — не показываем его собственные заказы
-    if current is not None:
-        q = q.filter(Order.customer_id != current.id)
+    # Не показываем исполнителю его собственные заказы как заказчика
+    q = q.filter(Order.customer_id != current.id)
 
     # --- Город ---
     if city is not None:
         q = q.filter(Order.city == city)
-    elif current is not None and not show_all and current.city:
+    elif not show_all and current.city:
         q = q.filter(Order.city == current.city)
 
     # --- Свежие заказы ---
@@ -105,36 +88,31 @@ def get_available_orders(
     # --- Категории из query-параметра ---
     query_categories: set[str] = set()
     if categories:
-        query_categories = {
-            c.strip() for c in categories.split(",") if c.strip()
-        }
+        query_categories = {c.strip() for c in categories.split(",") if c.strip()}
 
-    # --- Специализации исполнителя (для автофильтра) ---
+    # --- Специализации исполнителя ---
     executor_specs: set[str] = set()
-    if current is not None and current.specializations_raw:
+    if current.specializations_raw:
         executor_specs = set(str_to_list(current.specializations_raw))
 
     filtered: List[Order] = []
-
     for o in orders:
         order_cats = set(str_to_list(o.categories_raw))
 
-        # 1) Если заданы categories — фильтруем по ним
         if query_categories:
             if order_cats & query_categories:
                 filtered.append(o)
             continue
 
-        # 2) Автофильтр по специализациям, если show_all == False
-        if current is not None and not show_all and executor_specs:
+        if not show_all and executor_specs:
             if order_cats & executor_specs:
                 filtered.append(o)
             continue
 
-        # 3) Иначе — без фильтра по категориям
         filtered.append(o)
 
     return [_order_to_available(o) for o in filtered]
+
 
 @router.get("/my", response_model=List[OrderOut])
 def get_my_orders(

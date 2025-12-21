@@ -75,9 +75,11 @@ export default function RegisterCustomer() {
     setLoading(true);
     try {
       const tgUser = WebApp.initDataUnsafe?.user;
-      const telegramId =
-        tgUser?.id ?? Math.floor(Math.random() * 10_000_000);
-
+      if (!tgUser?.id) {
+        setError("Открой приложение внутри Telegram");
+        return;
+      }
+      const telegramId = tgUser.id;
       const user = await registerUser({
         telegram_id: telegramId,
         role: "customer" as UserRole,

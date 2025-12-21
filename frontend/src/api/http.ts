@@ -1,4 +1,5 @@
 // src/api/http.ts
+import WebApp from "@twa-dev/sdk";
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "https://workscout.ru/api/v1";
@@ -9,7 +10,7 @@ const BLOCKED_ROUTE = "/blocked";
 
 /**
  * Базовый helper для запросов к API.
- * - Автоматически подставляет X-User-Id из localStorage ("rp_user")
+ * - Автоматически подставляет X-Tg-Init-Data из Telegram WebApp
  * - Обрабатывает 401/403 (в т.ч. заблокированного пользователя)
  * - Возвращает JSON или текст в зависимости от ответа
  */
@@ -26,17 +27,10 @@ export async function apiFetch<T = any>(
     headers.set("Content-Type", "application/json");
   }
 
-  // X-User-Id из rp_user
-  const stored = localStorage.getItem("rp_user");
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed?.id) {
-        headers.set("X-User-Id", String(parsed.id));
-      }
-    } catch {
-      // если в localStorage мусор — просто игнорим
-    }
+  // X-Tg-Init-Data (подписанная строка от Telegram)
+  const initData = WebApp.initData || "";
+  if (initData) {
+    headers.set("X-Tg-Init-Data", initData);
   }
 
   // ----- сам запрос -----
@@ -86,50 +80,42 @@ export async function apiFetch<T = any>(
       (data && typeof data.detail === "string" && data.detail) ||
       (rawText || undefined);
 
-    // 401 — не авторизован / юзер не найден
     if (res.status === 401) {
       const code = typeof data?.detail === "string" ? data.detail : "";
 
-      // backend: get_current_user → "USER_NOT_AUTHENTICATED"
+      // НЕТ initData / не в Telegram
       if (code === "USER_NOT_AUTHENTICATED") {
-        try {
-          localStorage.removeItem("rp_user");
-        } catch {
-          /* ignore */
-        }
         redirectSafe(ROLE_ROUTE);
-        throw new Error("Не авторизован");
+        throw new Error("Не авторизован (открой мини-приложение в Telegram)");
       }
 
-      // backend: get_current_user → "USER_NOT_FOUND"
+      // Пользователь ещё не зарегистрирован
       if (code === "USER_NOT_FOUND") {
-        try {
-          localStorage.removeItem("rp_user");
-        } catch {
-          /* ignore */
-        }
         redirectSafe(ROLE_ROUTE);
-        throw new Error("Пользователь не найден");
+        throw new Error("Пользователь не найден (нужна регистрация)");
       }
 
-      // fallback: любой другой 401 — тоже чистим и шлём на выбор роли
-      try {
-        localStorage.removeItem("rp_user");
-      } catch {
-        /* ignore */
+      // Подпись не прошла / initData протух
+      if (code === "USER_INVALID_SIGNATURE") {
+        redirectSafe(ROLE_ROUTE);
+        throw new Error("Неверная подпись Telegram (initData)");
       }
+
+      if (code === "USER_INITDATA_EXPIRED") {
+        redirectSafe(ROLE_ROUTE);
+        throw new Error("Сессия Telegram устарела. Перезапусти мини-приложение.");
+      }
+
+      // fallback
       redirectSafe(ROLE_ROUTE);
       throw new Error(detail || "Не авторизован");
     }
 
-    // 403 — либо заблокирован, либо нет прав
     if (res.status === 403) {
       const d = (detail || "").toLowerCase();
 
-      // спец-кейс: заблокирован
       if (d.includes("заблокирован")) {
         try {
-          localStorage.removeItem("rp_user");
           localStorage.setItem("rp_blocked", "1");
         } catch {
           /* ignore */
@@ -138,22 +124,17 @@ export async function apiFetch<T = any>(
         throw new Error(detail || "Пользователь заблокирован");
       }
 
-      // остальные 403
       throw new Error(detail || "Нет доступа");
     }
 
-    // все прочие ошибки
     throw new Error(detail || `API error ${res.status}`);
   }
 
   // ----- успешный ответ -----
-
-  // JSON
   if (contentType.includes("application/json")) {
     return (await res.json()) as T;
   }
 
-  // fallback: текст
   const text = await res.text();
   return text as unknown as T;
 }
