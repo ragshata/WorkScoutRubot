@@ -1,10 +1,9 @@
 # app/api/deps.py
-import os
-import json
-import time
 import hmac
 import hashlib
-from typing import Generator, Optional, Dict, Any, List, Tuple
+import json
+import time
+from typing import Generator, Optional
 from urllib.parse import parse_qsl
 
 from fastapi import Depends, Header, HTTPException, status
@@ -13,10 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.user import User
 
-# Сколько секунд считаем Telegram initData "свежим" (защита от реюза).
-# Можно переопределить в backend/.env:
-# TG_INITDATA_MAX_AGE_SECONDS=86400
-TG_INITDATA_MAX_AGE_SECONDS = int(os.getenv("TG_INITDATA_MAX_AGE_SECONDS", "86400"))
+INITDATA_TTL_SECONDS = 60 * 60 * 24  # 24 часа
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -27,131 +23,80 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def _parse_init_data(init_data: str) -> Dict[str, str]:
-    # Telegram WebApp initData приходит как querystring: key=value&key2=value2
-    pairs: List[Tuple[str, str]] = parse_qsl(init_data, keep_blank_values=True)
-    return {k: v for k, v in pairs}
+def _verify_and_extract_tg_user_id(init_data: str, bot_token: str) -> int:
+    """
+    Telegram WebApp initData verification:
+    - parse querystring
+    - build data_check_string (sorted, without 'hash')
+    - secret_key = HMAC_SHA256("WebAppData", bot_token)
+    - check hash = HMAC_SHA256(secret_key, data_check_string)
+    - optionally check auth_date freshness
+    - extract user.id from 'user' JSON
+    """
+    if not init_data:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_NOT_AUTHENTICATED")
 
+    if not bot_token:
+        # если на сервере не настроили токен, подпись никогда не пройдёт
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="SERVER_TELEGRAM_TOKEN_MISSING")
 
-def _build_data_check_string(data: Dict[str, str]) -> str:
-    # По докам Telegram: берём все поля, кроме hash, сортируем по ключу,
-    # соединяем строкой "key=value" через \n
-    items = [(k, v) for k, v in data.items() if k != "hash"]
-    items.sort(key=lambda x: x[0])
-    return "\n".join([f"{k}={v}" for k, v in items])
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+    received_hash = pairs.get("hash", "")
+    if not received_hash:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_INVALID_SIGNATURE")
 
-
-def _verify_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, str]:
-    data = _parse_init_data(init_data)
-
-    recv_hash = data.get("hash")
-    if not recv_hash:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_INVALID_SIGNATURE",
-        )
-
-    # Проверка свежести (auth_date в секундах)
-    auth_date_str = data.get("auth_date")
-    if auth_date_str:
+    # expiry check
+    auth_date = pairs.get("auth_date")
+    if auth_date:
         try:
-            auth_date = int(auth_date_str)
+            auth_ts = int(auth_date)
+            if int(time.time()) - auth_ts > INITDATA_TTL_SECONDS:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_INITDATA_EXPIRED")
         except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="USER_INVALID_SIGNATURE",
-            )
+            pass
 
-        now = int(time.time())
-        if TG_INITDATA_MAX_AGE_SECONDS > 0 and auth_date < now - TG_INITDATA_MAX_AGE_SECONDS:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="USER_INITDATA_EXPIRED",
-            )
+    data_check_items = []
+    for k in sorted(pairs.keys()):
+        if k == "hash":
+            continue
+        data_check_items.append(f"{k}={pairs[k]}")
+    data_check_string = "\n".join(data_check_items)
 
-    data_check_string = _build_data_check_string(data)
+    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
+    computed_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    # Секретный ключ по Telegram: HMAC_SHA256(bot_token, "WebAppData")
-    secret_key = hmac.new(
-        key=bot_token.encode("utf-8"),
-        msg=b"WebAppData",
-        digestmod=hashlib.sha256,
-    ).digest()
+    if not hmac.compare_digest(computed_hash, received_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_INVALID_SIGNATURE")
 
-    # Проверочная подпись: HMAC_SHA256(data_check_string, secret_key)
-    calc_hash = hmac.new(
-        key=secret_key,
-        msg=data_check_string.encode("utf-8"),
-        digestmod=hashlib.sha256,
-    ).hexdigest()
+    user_raw = pairs.get("user")
+    if not user_raw:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_NOT_AUTHENTICATED")
 
-    if not hmac.compare_digest(calc_hash, recv_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_INVALID_SIGNATURE",
-        )
+    try:
+        user_obj = json.loads(user_raw)
+        tg_user_id = int(user_obj["id"])
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_NOT_AUTHENTICATED")
 
-    return data
+    return tg_user_id
 
 
 def get_current_user(
     db: Session = Depends(get_db),
     x_tg_init_data: Optional[str] = Header(default=None, alias="X-Tg-Init-Data"),
 ) -> User:
-    """
-    Прод-логика (Telegram Mini App):
+    bot_token = (  # берем из окружения через стандартный способ
+        __import__("os").getenv("TELEGRAM_BOT_TOKEN", "")
+    )
 
-    - нет X-Tg-Init-Data -> 401 USER_NOT_AUTHENTICATED
-    - подпись невалидна -> 401 USER_INVALID_SIGNATURE
-    - initData протух -> 401 USER_INITDATA_EXPIRED
-    - пользователя нет в БД -> 401 USER_NOT_FOUND (сначала /auth/register)
-    - is_blocked == True -> 403 "Пользователь заблокирован"
-    """
+    tg_user_id = _verify_and_extract_tg_user_id(x_tg_init_data or "", bot_token)
 
-    if not x_tg_init_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_NOT_AUTHENTICATED",
-        )
-
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not bot_token:
-        # Это конфиг-ошибка сервера: без токена нельзя проверить подпись
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SERVER_MISCONFIG_TELEGRAM_BOT_TOKEN",
-        )
-
-    data = _verify_telegram_init_data(x_tg_init_data, bot_token)
-
-    user_json = data.get("user")
-    if not user_json:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_NOT_AUTHENTICATED",
-        )
-
-    try:
-        user_obj: Dict[str, Any] = json.loads(user_json)
-        telegram_id = int(user_obj["id"])
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_NOT_AUTHENTICATED",
-        )
-
-    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    user = db.query(User).filter(User.telegram_id == tg_user_id).first()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="USER_NOT_FOUND",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="USER_NOT_FOUND")
 
     if getattr(user, "is_blocked", False):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Пользователь заблокирован",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь заблокирован")
 
     return user
 
@@ -164,5 +109,4 @@ def require_role(*roles: str):
                 detail=f"Недостаточно прав. Нужна роль: {roles}",
             )
         return current
-
     return dependency

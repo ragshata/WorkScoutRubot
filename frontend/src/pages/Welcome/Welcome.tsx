@@ -198,24 +198,10 @@ export default function Welcome() {
             </button>
           ))}
 
-          {/* смена роли */}
-          <button
-            className="
-              w-full rounded-2xl px-4 py-3
-              bg-white/5 border border-white/15
-              text-[11px] text-blue-100
-              backdrop-blur-xl
-              transition-all duration-200
-              active:scale-[0.98]
-            "
-            onClick={() => navigate("/role")}
-          >
-            Сменить роль или пройти регистрацию заново
-          </button>
         </div>
 
         <div className="mt-10 text-[10px] text-blue-300/70">
-          WorkScout · Telegram mini app · быстрые заказы рядом
+          WorkScout · быстрые заказы рядом
         </div>
       </div>
     </Page>
