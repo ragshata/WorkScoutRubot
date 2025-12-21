@@ -25,20 +25,16 @@ export default function RegisterExecutor() {
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const skills = [
-    "Строительство",
-    "Ремонт",
-    "Доставка",
-    "Курьер",
-    "Грузчик",
-    "Сантехник",
-    "Электрик",
-    "Разнорабочий",
-    "Сварщик",
-    "Столяр",
-    "Электромонтаж",
-    "Клининг",
-    "Монтажник",
+  "Отделка",
+  "Сантехника",
+  "Электрика",
+  "Кровля",
+  "Фасад",
+  "Черновые работы",
+  "Окна и двери",
+  "Полы",
   ];
+
 
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
 

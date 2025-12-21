@@ -1,13 +1,10 @@
 # app/utils.py
-
 from typing import List, Optional
-
 
 def str_to_list(value: Optional[str]) -> List[str]:
     if not value:
         return []
-    return [item for item in value.split(",") if item]
-
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 def list_to_str(values: Optional[List[str]]) -> Optional[str]:
     if not values:
