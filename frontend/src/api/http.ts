@@ -4,9 +4,30 @@ import WebApp from "@twa-dev/sdk";
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "https://workscout.ru/api/v1";
 
-// куда гнать гостя на выбор роли
 const ROLE_ROUTE = "/role";
 const BLOCKED_ROUTE = "/blocked";
+
+// Страницы, где НЕ надо устраивать бесконечные редиректы
+const AUTH_PAGES = ["/role", "/reg", "/reg/executor", "/reg/customer", "/blocked"];
+
+function isOnAuthPage() {
+  const p = window.location.pathname;
+  return AUTH_PAGES.some((x) => p === x || p.startsWith(x + "/"));
+}
+
+function clearLocalUser() {
+  try {
+    localStorage.removeItem("rp_user");
+  } catch {
+    /* ignore */
+  }
+}
+
+function redirectSafe(to: string) {
+  if (window.location.pathname !== to) {
+    window.location.href = to;
+  }
+}
 
 /**
  * Базовый helper для запросов к API.
@@ -18,28 +39,38 @@ export async function apiFetch<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  // ----- заголовки -----
   const headers = new Headers(options.headers || {});
 
-  // Content-Type по умолчанию, если это не FormData и не задан руками
   const isFormData = options.body instanceof FormData;
   if (!isFormData && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
-  // X-Tg-Init-Data (подписанная строка от Telegram)
+  // initData должен быть непустой строкой внутри Telegram Mini App
   const initData = WebApp.initData || "";
   if (initData) {
     headers.set("X-Tg-Init-Data", initData);
   }
 
-  // ----- сам запрос -----
+  // Если это защищённый запрос и initData пустой, лучше сразу честно упасть,
+  // чем гонять пользователя по кругу.
+  // Исключения: открытые эндпоинты можно добавить сюда при необходимости.
+  const likelyProtected =
+    !path.startsWith("/openapi") &&
+    !path.startsWith("/docs") &&
+    !path.startsWith("/auth/register");
+
+  if (likelyProtected && !initData) {
+    clearLocalUser();
+    if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
+    throw new Error("Открой мини-приложение внутри Telegram (нет initData)");
+  }
+
   const res = await fetch(API_BASE_URL + path, {
     ...options,
     headers,
   });
 
-  // 204 No Content
   if (res.status === 204) {
     return null as unknown as T;
   }
@@ -48,7 +79,6 @@ export async function apiFetch<T = any>(
   let rawText: string | null = null;
   let data: any = null;
 
-  // хелпер: читаем тело один раз и пробуем распарсить JSON
   const readBodyOnce = async () => {
     if (rawText !== null) return;
     try {
@@ -57,22 +87,19 @@ export async function apiFetch<T = any>(
       rawText = null;
     }
 
-    if (rawText && rawText.trim().startsWith("{")) {
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        data = null;
+    // иногда FastAPI возвращает JSON-массив или строку detail, поэтому парсим аккуратно
+    if (rawText) {
+      const t = rawText.trim();
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try {
+          data = JSON.parse(t);
+        } catch {
+          data = null;
+        }
       }
     }
   };
 
-  const redirectSafe = (to: string) => {
-    if (window.location.pathname !== to) {
-      window.location.href = to;
-    }
-  };
-
-  // ----- обработка ошибок -----
   if (!res.ok) {
     await readBodyOnce();
 
@@ -83,31 +110,35 @@ export async function apiFetch<T = any>(
     if (res.status === 401) {
       const code = typeof data?.detail === "string" ? data.detail : "";
 
+      // 401 всегда означает: текущий пользователь не определён.
+      // Чтобы не было "меню -> рега -> меню", чистим rp_user.
+      clearLocalUser();
+
       // НЕТ initData / не в Telegram
       if (code === "USER_NOT_AUTHENTICATED") {
-        redirectSafe(ROLE_ROUTE);
+        if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
         throw new Error("Не авторизован (открой мини-приложение в Telegram)");
       }
 
       // Пользователь ещё не зарегистрирован
       if (code === "USER_NOT_FOUND") {
-        redirectSafe(ROLE_ROUTE);
+        if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
         throw new Error("Пользователь не найден (нужна регистрация)");
       }
 
-      // Подпись не прошла / initData протух
+      // Подпись не прошла
       if (code === "USER_INVALID_SIGNATURE") {
-        redirectSafe(ROLE_ROUTE);
-        throw new Error("Неверная подпись Telegram (initData)");
+        if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
+        throw new Error("Неверная подпись Telegram (initData). Проверь токен на сервере.");
       }
 
+      // initData протух
       if (code === "USER_INITDATA_EXPIRED") {
-        redirectSafe(ROLE_ROUTE);
-        throw new Error("Сессия Telegram устарела. Перезапусти мини-приложение.");
+        if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
+        throw new Error("Сессия Telegram устарела. Закрой и заново открой мини-приложение.");
       }
 
-      // fallback
-      redirectSafe(ROLE_ROUTE);
+      if (!isOnAuthPage()) redirectSafe(ROLE_ROUTE);
       throw new Error(detail || "Не авторизован");
     }
 
@@ -115,6 +146,7 @@ export async function apiFetch<T = any>(
       const d = (detail || "").toLowerCase();
 
       if (d.includes("заблокирован")) {
+        clearLocalUser();
         try {
           localStorage.setItem("rp_blocked", "1");
         } catch {
@@ -130,7 +162,6 @@ export async function apiFetch<T = any>(
     throw new Error(detail || `API error ${res.status}`);
   }
 
-  // ----- успешный ответ -----
   if (contentType.includes("application/json")) {
     return (await res.json()) as T;
   }
