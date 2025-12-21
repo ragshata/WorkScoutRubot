@@ -32,6 +32,7 @@ class Order(Base):
     city = Column(String, nullable=False)
     address = Column(String, nullable=True)
 
+    # В БД колонка называется "categories", но в коде используем categories_raw
     categories_raw = Column("categories", String, nullable=True)
 
     budget_type = Column(String, nullable=False)  # fixed | negotiable
@@ -52,7 +53,6 @@ class Order(Base):
 
     # ====== RELATIONSHIPS ======
 
-    # Явно говорим, какой FK использовать и как биндится к User
     customer = relationship(
         "User",
         back_populates="customer_orders",
