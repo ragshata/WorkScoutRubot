@@ -10,7 +10,7 @@ export default function App() {
       // включи, если хочешь всегда фуллскрин:
       // WebApp.expand();
     } catch {
-      // если открыли не в Telegram, SDK может падать — это ок
+      // если открыли не в Telegram, SDK может падать 
     }
   }, []);
 
