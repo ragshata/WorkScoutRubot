@@ -21,22 +21,23 @@ export interface RegisterPayload {
 
 /**
  * Регистрация пользователя.
- * Теперь отправляем X-Tg-Init-Data (подписанная строка Telegram).
+ * Отправляем X-Tg-Init-Data (подписанная строка Telegram WebApp).
  */
 export async function registerUser(payload: RegisterPayload): Promise<User> {
   const initData = WebApp.initData || "";
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  if (initData) {
-    headers["X-Tg-Init-Data"] = initData;
+  // Если открыли не внутри Telegram, initData будет пустым
+  // В проде лучше сразу сказать правду, а не пытаться "как-нибудь".
+  if (!initData) {
+    throw new Error("Открой мини-приложение внутри Telegram (initData пустой)");
   }
 
   const res = await fetch(`${API_BASE_URL}/auth/register`, {
     method: "POST",
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Tg-Init-Data": initData,
+    },
     body: JSON.stringify(payload),
   });
 
@@ -44,7 +45,7 @@ export async function registerUser(payload: RegisterPayload): Promise<User> {
     let msg = `HTTP ${res.status}`;
     try {
       const data = await res.json();
-      if ((data as any).detail) msg = (data as any).detail;
+      if ((data as any)?.detail) msg = (data as any).detail;
     } catch {
       // ignore
     }
