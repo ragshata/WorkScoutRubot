@@ -49,6 +49,28 @@ def create_order(
     db.refresh(order)
     return _order_to_out(order)
 
+@router.get("/all-active", response_model=List[AvailableOrderDto])
+def get_all_active_orders(
+    db: Session = Depends(get_db),
+    current: User = Depends(require_role("executor")),
+):
+    """
+    Максимально тупая и надежная выдача:
+    - все заказы со статусом active
+    - без фильтров по городу/категориям/специализациям
+    - не показываем исполнителю заказы, которые он сам создал как customer (если вдруг роли пересекутся)
+    """
+    orders = (
+        db.query(Order)
+        .filter(Order.status == "active")
+        .filter(Order.customer_id != current.id)
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+
+    return [_order_to_available(o) for o in orders]
+
+
 @router.get("/available", response_model=List[AvailableOrderDto])
 def get_available_orders(
     city: Optional[str] = Query(default=None),
@@ -539,3 +561,4 @@ def _order_to_available(order: Order) -> AvailableOrderDto:
         has_photos=order.has_photos,
         created_at=order.created_at,
     )
+

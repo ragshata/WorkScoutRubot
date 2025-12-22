@@ -168,7 +168,6 @@ export interface AvailableOrderDto {
   created_at: string;
 }
 
-/** Доступные заказы для исполнителя (GET /orders/available) */
 export async function getAvailableOrders(): Promise<AvailableOrderDto[]> {
-  return apiFetch("/orders/available");
+  return apiFetch<AvailableOrderDto[]>("/orders/all-active");
 }
