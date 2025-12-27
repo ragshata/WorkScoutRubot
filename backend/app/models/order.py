@@ -40,6 +40,7 @@ class Order(Base):
 
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
+    photos_raw = Column("photos", String, nullable=True)
 
     # active | in_progress | done | cancelled и т.п.
     status = Column(String, nullable=False, default="active")

@@ -6,7 +6,6 @@ import Button from "../../components/ui/Button";
 import BottomSheet from "../../components/ui/BottomSheet";
 import { getMe, updateMe, type UserDto } from "../../api/users";
 
-
 type CustomerStatus = "person" | "ip" | "ooo";
 
 const CUSTOMER_STATUS_LABEL: Record<CustomerStatus, string> = {
@@ -40,11 +39,22 @@ function statusFromBackend(value?: string | null): CustomerStatus {
   return "person";
 }
 
+// Расширяем UserDto мягко, чтобы фронт не падал, пока бэк не готов.
+type UserWithStats = UserDto & {
+  avatar_url?: string | null;
+  photo_url?: string | null;
+  rating?: number | null;
+  reviews_count?: number | null;
+  orders_completed_count?: number | null;
+  orders_created_count?: number | null;
+  orders_count?: number | null; // оставим как возможное реальное поле
+};
+
 export default function Profile() {
   const location = useLocation();
   const [animate, setAnimate] = useState(false);
 
-  const [user, setUser] = useState<UserDto | null>(null);
+  const [user, setUser] = useState<UserWithStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,15 +97,12 @@ export default function Profile() {
       try {
         setLoading(true);
         setError(null);
-        const me = await getMe();
+        const me = (await getMe()) as UserWithStats;
         if (cancelled) return;
 
         setUser(me);
 
-        const fullName = [me.first_name, me.last_name]
-          .filter(Boolean)
-          .join(" ");
-
+        const fullName = [me.first_name, me.last_name].filter(Boolean).join(" ");
         setName(fullName || "");
         setCity(me.city ?? "");
         setPhone(me.phone ?? "+7 ");
@@ -109,9 +116,7 @@ export default function Profile() {
         }
       } catch (e) {
         console.error(e);
-        if (!cancelled) {
-          setError("Не удалось загрузить профиль");
-        }
+        if (!cancelled) setError("Не удалось загрузить профиль");
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -153,7 +158,7 @@ export default function Profile() {
     try {
       setSaving(true);
       setError(null);
-      const updated = await updateMe(payload);
+      const updated = (await updateMe(payload)) as UserWithStats;
       setUser(updated);
 
       // слегка обновим localStorage, чтобы имя в других местах было свежим
@@ -173,7 +178,7 @@ export default function Profile() {
           );
         }
       } catch {
-        // если что-то не так в localStorage — просто игнорим
+        // игнор
       }
 
       setToast("Профиль сохранён");
@@ -188,13 +193,31 @@ export default function Profile() {
 
   const canSave = name.trim().length >= 2 && phone.trim().length >= 4;
 
-  // фолбэки для карточки сверху
-  const displayName = name || "Имя Фамилия";
-  const rating =
-    (user && typeof user.rating === "number" && user.rating) || 4.9;
-  const ordersCount =
-    (user && typeof user.orders_count === "number" && user.orders_count) ||
-    (isExecutor ? 24 : 12);
+  // Без мокапов: показываем реальные данные или "—"
+  const displayName = name.trim() ? name.trim() : "—";
+
+  const rating = typeof user?.rating === "number" ? user.rating : null;
+  const reviewsCount =
+    typeof user?.reviews_count === "number" ? user.reviews_count : null;
+
+  const ordersCompletedCount =
+    typeof user?.orders_completed_count === "number"
+      ? user.orders_completed_count
+      : typeof user?.orders_count === "number"
+      ? user.orders_count
+      : null;
+
+  const ordersCreatedCount =
+    typeof user?.orders_created_count === "number"
+      ? user.orders_created_count
+      : typeof user?.orders_count === "number"
+      ? user.orders_count
+      : null;
+
+  const avatarUrl =
+    (typeof user?.avatar_url === "string" && user.avatar_url) ||
+    (typeof user?.photo_url === "string" && user.photo_url) ||
+    null;
 
   return (
     <Page>
@@ -274,8 +297,17 @@ export default function Profile() {
                   flex items-center gap-4
                 "
               >
-                <div className="w-14 h-14 rounded-full bg-white/20 flex items-center justify-center text-3xl">
-                  {isExecutor ? "👷" : "🧑‍💼"}
+                <div className="w-14 h-14 rounded-full bg-white/20 overflow-hidden flex items-center justify-center">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt="avatar"
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="text-3xl">{isExecutor ? "👷" : "🧑‍💼"}</div>
+                  )}
                 </div>
 
                 <div className="flex-1">
@@ -287,12 +319,19 @@ export default function Profile() {
                   </div>
 
                   <div className="mt-2 flex items-center gap-3 text-[11px] text-blue-100">
-                    <span>⭐️ {rating.toFixed(1)}</span>
+                    <span>
+                      ⭐️ {rating !== null ? rating.toFixed(1) : "—"}
+                      {reviewsCount !== null ? ` (${reviewsCount})` : ""}
+                    </span>
                     <span className="w-[1px] h-3 bg-white/20" />
                     <span>
                       {isExecutor
-                        ? `${ordersCount} выполненных заказов`
-                        : `${ordersCount} созданных заказов`}
+                        ? ordersCompletedCount !== null
+                          ? `${ordersCompletedCount} выполненных заказов`
+                          : "— выполненных заказов"
+                        : ordersCreatedCount !== null
+                        ? `${ordersCreatedCount} созданных заказов`
+                        : "— созданных заказов"}
                     </span>
                   </div>
                 </div>
@@ -307,9 +346,7 @@ export default function Profile() {
                   space-y-4
                 "
               >
-                <div className="text-sm font-semibold mb-1">
-                  Основные данные
-                </div>
+                <div className="text-sm font-semibold mb-1">Основные данные</div>
 
                 <Input
                   label="Имя и фамилия"
@@ -319,7 +356,7 @@ export default function Profile() {
                     setName(e.target.value)
                   }
                 />
-                
+
                 <Input
                   label="Телефон"
                   placeholder="+7 ___ ___-__-__"
@@ -329,15 +366,14 @@ export default function Profile() {
 
                 {isExecutor ? (
                   <>
-                  <Input
-                    label="Город"
-                    placeholder="Ваш город"
-                    value={city}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setCity(e.target.value)
-                    }
-                  />
-                    
+                    <Input
+                      label="Город"
+                      placeholder="Ваш город"
+                      value={city}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setCity(e.target.value)
+                      }
+                    />
 
                     {selectedSpecs.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
@@ -363,6 +399,7 @@ export default function Profile() {
                         setAbout(e.target.value)
                       }
                     />
+
                     {/* Кнопка выбора специализаций */}
                     <button
                       type="button"
@@ -377,7 +414,6 @@ export default function Profile() {
                       Специализации
                     </button>
                   </>
-                  
                 ) : (
                   <>
                     {/* Статус заказчика */}
@@ -386,7 +422,7 @@ export default function Profile() {
                       onClick={() => setIsStatusSheetOpen(true)}
                       className="
                         w-full mt-2 py-3 rounded-2xl 
-                        bg.white/15 border border-white/30 backdrop-blur-xl
+                        bg-white/15 border border-white/30 backdrop-blur-xl
                         text-white text-[13px] font-semibold
                         hover:bg-white/25 active:scale-95 transition
                       "
@@ -415,29 +451,6 @@ export default function Profile() {
                   </Button>
                 </div>
               </section>
-
-              {/* блок для портфолио / документов */}
-              {isExecutor && (
-                <section
-                  className="
-                    rounded-3xl bg-white/6 border border-white/15
-                    backdrop-blur-2xl p-5
-                    shadow-[0_0_20px_rgba(0,0,0,0.25)]
-                    space-y-3
-                  "
-                >
-                  <div className="text-sm font-semibold">
-                    Портфолио работ
-                  </div>
-                  <p className="text-[11px] text-blue-100">
-                    Добавьте фото выполненных проектов — так вас быстрее
-                    выберут среди других исполнителей.
-                  </p>
-                  <Button className="w-full text-[12px]">
-                    Загрузить фото работ
-                  </Button>
-                </section>
-              )}
             </>
           )}
         </div>

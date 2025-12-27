@@ -35,6 +35,7 @@ class UserOut(BaseModel):
     company_name: Optional[str] = None
     about_orders: Optional[str] = None
 
+    avatar_url: Optional[str] = None
     # то, что уже было
     rating: Optional[float] = None
     orders_count: Optional[int] = None

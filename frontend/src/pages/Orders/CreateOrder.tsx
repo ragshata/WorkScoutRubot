@@ -1,12 +1,12 @@
 // src/pages/Orders/CreateOrder.tsx
 
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../../components/layout/Page";
 import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
 import BottomSheet from "../../components/ui/BottomSheet";
-import { createOrder, type BudgetType } from "../../api/orders";
+import { createOrder, uploadOrderPhotos, type BudgetType } from "../../api/orders";
 import { getUserFromStorage } from "../../api/users";
 
 const CATEGORIES = [
@@ -46,6 +46,9 @@ export default function CreateOrder() {
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
 
+  // фото (1–3)
+  const [photos, setPhotos] = useState<File[]>([]);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +62,29 @@ export default function CreateOrder() {
     );
   };
 
+  const handlePhotosChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+
+    // максимум 3, как обещали людям (и как бэк ждёт)
+    setPhotos((prev) => [...prev, ...files].slice(0, 3));
+
+    // чтобы можно было выбрать тот же файл снова (браузеры иногда не триггерят change)
+    e.target.value = "";
+  };
+
+  const removePhoto = (idx: number) => {
+    setPhotos((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // превью URL (и да, мы их чистим, потому что память тоже имеет чувства)
+  const previewUrls = useMemo(() => photos.map((f) => URL.createObjectURL(f)), [photos]);
+  useEffect(() => {
+    return () => {
+      previewUrls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [previewUrls]);
+
   const handleNext = async () => {
     setError(null);
 
@@ -67,7 +93,6 @@ export default function CreateOrder() {
       return;
     }
 
-    // финальный шаг — создаём заказ на бэке
     await handleSubmit();
   };
 
@@ -116,7 +141,8 @@ export default function CreateOrder() {
 
     setSubmitting(true);
     try {
-      await createOrder({
+      // 1) создаём заказ
+      const created = await createOrder({
         customer_id: currentUser.id, // фронту удобно, бэк игнорит
         title,
         description: description.trim(),
@@ -125,12 +151,21 @@ export default function CreateOrder() {
         categories: selectedCategories,
         budget_type: budgetMode,
         budget_amount: numericBudget ?? null,
-        // имена полей должны совпадать с CreateOrderPayload в api/orders.ts
-        date_from: startDate || null,
-        date_to: endDate || null,
-      } as any);
+        // ВАЖНО: как на бэке: start_date / end_date
+        start_date: startDate || null,
+        end_date: endDate || null,
+      });
 
-      // после успешного создания — в "Мои заказы"
+      // 2) если есть фото — грузим их отдельным запросом
+      if (photos.length > 0) {
+        try {
+          await uploadOrderPhotos(created.id, photos);
+        } catch (e) {
+          // заказ уже создан, поэтому фото не должны ломать UX
+          console.error(e);
+        }
+      }
+
       navigate("/customer/orders");
     } catch (e: any) {
       console.error(e);
@@ -253,7 +288,6 @@ export default function CreateOrder() {
                   </div>
                 </div>
 
-                {/* кнопка: открывает bottom sheet как в регистрации */}
                 <button
                   type="button"
                   onClick={() => setIsCategorySheetOpen(true)}
@@ -448,9 +482,11 @@ export default function CreateOrder() {
                   "
                 >
                   <div className="text-3xl mb-1">📷</div>
-                  <div>Нажмите, чтобы выбрать фото</div>
+                  <div>
+                    {photos.length === 0 ? "Нажмите, чтобы выбрать фото" : `Выбрано фото: ${photos.length}/3`}
+                  </div>
                   <div className="text-[10px] text-blue-200/80 mt-1">
-                    Поддерживаются изображения · можно добавить позже
+                    jpg / png / webp · до 8MB
                   </div>
                 </label>
                 <input
@@ -459,7 +495,33 @@ export default function CreateOrder() {
                   accept="image/*"
                   multiple
                   className="hidden"
+                  onChange={handlePhotosChange}
                 />
+
+                {photos.length > 0 && (
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    {previewUrls.map((url, idx) => (
+                      <div
+                        key={url}
+                        className="relative rounded-xl overflow-hidden border border-white/20"
+                      >
+                        <img
+                          src={url}
+                          alt="Фото"
+                          className="w-full h-20 object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removePhoto(idx)}
+                          className="absolute top-1 right-1 bg-black/55 text-white text-[10px] px-2 py-1 rounded-lg"
+                          disabled={submitting}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             </>
           )}
@@ -474,7 +536,6 @@ export default function CreateOrder() {
           {/* нижняя панель управления шагами */}
           <div className="mt-6 sticky bottom-4 left-0 right-0">
             {step === 0 ? (
-              // на первом шаге — только большая кнопка "Дальше"
               <div
                 className="
                   rounded-2xl bg-blue-950/85 border border-white/15
@@ -490,7 +551,6 @@ export default function CreateOrder() {
                 </Button>
               </div>
             ) : (
-              // дальше — Назад + Дальше / Опубликовать
               <div
                 className="
                   rounded-2xl bg-blue-950/85 border border-white/15
@@ -529,13 +589,12 @@ export default function CreateOrder() {
         </div>
       </div>
 
-      {/* BottomSheet для категорий — как при регистрации */}
+      {/* BottomSheet для категорий */}
       <BottomSheet
         open={isCategorySheetOpen}
         onClose={() => setIsCategorySheetOpen(false)}
       >
         <div className="pt-3 pb-6 px-5">
-          {/* хэндл сверху, чтобы не казалось приплюснутым */}
           <div className="w-10 h-1 rounded-full bg-white/30 mx-auto mb-4" />
 
           <div className="flex items-center justify-between mb-3">

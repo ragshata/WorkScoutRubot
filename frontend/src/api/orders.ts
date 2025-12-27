@@ -171,3 +171,14 @@ export interface AvailableOrderDto {
 export async function getAvailableOrders(): Promise<AvailableOrderDto[]> {
   return apiFetch<AvailableOrderDto[]>("/orders/all-active");
 }
+
+export async function uploadOrderPhotos(orderId: number, files: File[]) {
+  const form = new FormData();
+  files.slice(0, 3).forEach((f) => form.append("files", f));
+
+  // ВАЖНО: apiFetch должен уметь FormData (не ставить JSON Content-Type)
+  return apiFetch(`/orders/${orderId}/photos`, {
+    method: "POST",
+    body: form as any,
+  });
+}

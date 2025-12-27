@@ -13,6 +13,9 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(Integer, unique=True, index=True, nullable=False)
 
+    avatar_url = Column(String, nullable=True)
+    avatar_updated_at = Column(DateTime(timezone=True), nullable=True)
+
     role = Column(String, nullable=False)  # customer | executor | admin
 
     first_name = Column(String, nullable=False)

@@ -35,6 +35,7 @@ class OrderOut(BaseModel):
     end_date: Optional[date]
     status: str
     has_photos: bool
+    photos: List[str] = []
     created_at: datetime
     executor_id: Optional[int] = None
 
@@ -54,6 +55,7 @@ class AvailableOrderDto(BaseModel):
     date_from: Optional[date]
     date_to: Optional[date]
     has_photos: bool
+    photos: List[str] = []
     created_at: datetime
 
 class OrderUpdate(BaseModel):

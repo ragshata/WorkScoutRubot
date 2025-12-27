@@ -1,8 +1,11 @@
 from bot.notifications import notify_executor_chosen
 from datetime import datetime, timedelta
 from typing import List, Optional
+import os
+import time
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_role, get_current_user
@@ -18,10 +21,27 @@ from app.utils import list_to_str, str_to_list
 router = APIRouter(
     prefix="/orders",
     tags=["orders"],
-)  
+)
 
 # сколько дней считаем "свежим" заказом
 FRESH_DAYS = 3
+
+# ===== загрузка фото заказа =====
+MAX_FILES = 3
+MAX_BYTES = 8 * 1024 * 1024
+ALLOWED = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+ORDER_PHOTO_DIR = Path(
+    os.getenv("ORDER_PHOTO_DIR", "/opt/workscout/current/backend/media/orders")
+)
+PUBLIC_MEDIA_BASE = os.getenv("PUBLIC_MEDIA_BASE", "https://workscout.ru/media")
+
+
+def _save_order_photo(order_id: int, content: bytes, ext: str) -> str:
+    ORDER_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"o{order_id}_{int(time.time() * 1000)}.{ext}"
+    (ORDER_PHOTO_DIR / filename).write_bytes(content)
+    return f"{PUBLIC_MEDIA_BASE}/orders/{filename}"
 
 
 @router.post("/", response_model=OrderOut)
@@ -43,11 +63,66 @@ def create_order(
         end_date=payload.end_date,
         status="active",
         has_photos=False,
+        # photos_raw оставляем пустым
     )
     db.add(order)
     db.commit()
     db.refresh(order)
     return _order_to_out(order)
+
+
+@router.post("/{order_id}/photos")
+async def upload_order_photos(
+    order_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current: User = Depends(require_role("customer")),
+):
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id, Order.customer_id == current.id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Заказ не найден")
+
+    existing = str_to_list(getattr(order, "photos_raw", None))
+    if len(existing) >= MAX_FILES:
+        raise HTTPException(status_code=400, detail="Фото уже загружены (максимум 3)")
+
+    if not files:
+        return {"photos": existing, "has_photos": order.has_photos}
+
+    # сколько ещё можно добавить
+    remaining = MAX_FILES - len(existing)
+    files = files[:remaining]
+
+    new_urls: List[str] = []
+    for f in files:
+        if f.content_type not in ALLOWED:
+            raise HTTPException(
+                status_code=400, detail="Разрешены только jpg/png/webp"
+            )
+
+        content = await f.read()
+        if len(content) > MAX_BYTES:
+            raise HTTPException(
+                status_code=400, detail="Файл слишком большой (макс 8MB)"
+            )
+
+        ext = ALLOWED[f.content_type]
+        new_urls.append(_save_order_photo(order.id, content, ext))
+
+    merged = (existing + new_urls)[:MAX_FILES]
+    order.photos_raw = list_to_str(merged)
+    order.has_photos = len(merged) > 0
+
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    return {"photos": merged, "has_photos": order.has_photos}
+
 
 @router.get("/all-active", response_model=List[AvailableOrderDto])
 def get_all_active_orders(
@@ -74,7 +149,9 @@ def get_all_active_orders(
 @router.get("/available", response_model=List[AvailableOrderDto])
 def get_available_orders(
     city: Optional[str] = Query(default=None),
-    categories: Optional[str] = Query(default=None, description="Строка категорий через запятую"),
+    categories: Optional[str] = Query(
+        default=None, description="Строка категорий через запятую"
+    ),
     fresh_only: bool = Query(default=False),
     show_all: bool = Query(
         default=False,
@@ -149,6 +226,7 @@ def get_my_orders(
     )
     return [_order_to_out(o) for o in orders]
 
+
 @router.get("/{order_id}", response_model=OrderOut)
 def get_order_by_id(
     order_id: int,
@@ -167,6 +245,7 @@ def get_order_by_id(
         raise HTTPException(status_code=404, detail="Заказ не найден")
 
     return _order_to_out(order)
+
 
 @router.patch("/{order_id}", response_model=OrderOut)
 def update_order(
@@ -248,8 +327,6 @@ def delete_order(
     db.add(order)
     db.commit()
     return None
-
-
 
 
 # =========================
@@ -339,7 +416,6 @@ def choose_executor(
     return _order_to_out(order)
 
 
-
 # =========================
 # CHAT-LINK в Telegram
 # =========================
@@ -419,7 +495,6 @@ def show_contacts(
 
     chat = db.query(Chat).filter(Chat.order_id == order.id).first()
     if not chat:
-        # теоретически чат должен был создаться в choose_executor
         chat = Chat(
             order_id=order.id,
             customer_id=order.customer_id,
@@ -463,7 +538,6 @@ def complete_order(
         raise HTTPException(status_code=403, detail="Нет доступа к этому заказу")
 
     if order.status == "done":
-        # уже завершён — просто возвращаем
         return _order_to_out(order)
 
     if order.status not in ("in_progress", "active"):
@@ -472,8 +546,6 @@ def complete_order(
             detail="Этот заказ нельзя завершить в текущем статусе",
         )
 
-    # Триггер для будущих отзывов: дальше будем разрешать оставлять отзывы
-    # только если order.status == "done"
     order.status = "done"
 
     db.add(order)
@@ -488,7 +560,6 @@ def complete_order(
 # =========================
 
 def _build_chat_contacts(chat: Chat, db: Session) -> ChatContactsOut:
-    # подтягиваем пользователей
     customer = db.query(User).filter(User.id == chat.customer_id).first()
     executor = db.query(User).filter(User.id == chat.executor_id).first()
 
@@ -541,6 +612,7 @@ def _order_to_out(order: Order) -> OrderOut:
         end_date=order.end_date,
         status=order.status,
         has_photos=order.has_photos,
+        photos=str_to_list(getattr(order, "photos_raw", None)),
         created_at=order.created_at,
         executor_id=order.executor_id,
     )
@@ -559,6 +631,6 @@ def _order_to_available(order: Order) -> AvailableOrderDto:
         date_from=order.start_date,
         date_to=order.end_date,
         has_photos=order.has_photos,
+        photos=str_to_list(getattr(order, "photos_raw", None)),
         created_at=order.created_at,
     )
-

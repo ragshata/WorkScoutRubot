@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 
+from backend.app.services.telegram_avatar import sync_user_avatar_if_needed
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -21,7 +22,13 @@ def get_me(
     db: Session = Depends(get_db),
     current: User = Depends(get_current_user),
 ):
+    if sync_user_avatar_if_needed(current):
+        db.add(current)
+        db.commit()
+        db.refresh(current)
+
     return _build_user_out(current, db)
+
 
 
 @router.put("/me", response_model=UserOut)
@@ -84,19 +91,6 @@ def get_user_by_id(
 # ХЕЛПЕРЫ
 # =========================
 def _build_user_out(user: User, db: Session) -> UserOut:
-    """
-    Собираем DTO профиля с рейтингом, количеством завершённых заказов
-    и инфой по отзывам.
-
-    rating:
-        среднее по Review.rating, где target_user_id = user.id и status='approved'
-    reviews_count:
-        количество таких отзывов
-    orders_count:
-        количество заказов со статусом 'done', где user участвовал
-        как заказчик или как исполнитель.
-    """
-    # рейтинг + количество отзывов
     rating_row = (
         db.query(
             func.avg(Review.rating).label("avg_rating"),
@@ -119,19 +113,36 @@ def _build_user_out(user: User, db: Session) -> UserOut:
 
     has_reviews = reviews_count > 0
 
-    # количество завершённых заказов
+    # Старое поле (оставим, чтобы фронт/другие места не развалились)
     orders_count: int = (
         db.query(func.count(Order.id))
         .filter(
             Order.status == "done",
-            or_(
-                Order.customer_id == user.id,
-                Order.executor_id == user.id,
-            ),
+            or_(Order.customer_id == user.id, Order.executor_id == user.id),
         )
         .scalar()
         or 0
     )
+
+    # НОВОЕ: раздельно по роли
+    orders_completed_count = 0
+    orders_created_count = 0
+
+    if user.role == "executor":
+        orders_completed_count = (
+            db.query(func.count(Order.id))
+            .filter(Order.status == "done", Order.executor_id == user.id)
+            .scalar()
+            or 0
+        )
+    else:
+        # "созданных" логичнее считать все статусы
+        orders_created_count = (
+            db.query(func.count(Order.id))
+            .filter(Order.customer_id == user.id)
+            .scalar()
+            or 0
+        )
 
     return UserOut(
         id=user.id,
@@ -144,9 +155,17 @@ def _build_user_out(user: User, db: Session) -> UserOut:
         specializations=str_to_list(user.specializations_raw),
         company_name=user.company_name,
         about_orders=user.about_orders,
+
+        avatar_url=getattr(user, "avatar_url", None),
+
         rating=rating_value,
         orders_count=orders_count,
+
+        orders_completed_count=orders_completed_count,
+        orders_created_count=orders_created_count,
+
         reviews_count=reviews_count,
         has_reviews=has_reviews,
     )
+
 
