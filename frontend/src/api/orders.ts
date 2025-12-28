@@ -165,6 +165,7 @@ export interface AvailableOrderDto {
   date_from: string | null;
   date_to: string | null;
   has_photos: boolean;
+  photos?: string[];
   created_at: string;
 }
 

@@ -2,10 +2,7 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import Page from "../../components/layout/Page";
 import Button from "../../components/ui/Button";
 import BottomSheet from "../../components/ui/BottomSheet";
-import {
-  getAvailableOrders,
-  type AvailableOrderDto,
-} from "../../api/orders";
+import { getAvailableOrders, type AvailableOrderDto } from "../../api/orders";
 import { sendOrderResponse } from "../../api/responses";
 
 type SortMode = "recent" | "budget" | "deadline";
@@ -21,6 +18,7 @@ type Order = {
   dates: string;
   description: string;
   hasPhotos: boolean;
+  photos: string[]; // ✅ новое
   createdAt: number;
   deadlineWeight: number;
 };
@@ -31,7 +29,6 @@ const SORT_OPTIONS: { key: SortMode; label: string }[] = [
   { key: "deadline", label: "Сроки" },
 ];
 
-// 🔹 дефолтные категории, как в создании заказа / регистрации
 const DEFAULT_CATEGORIES = [
   "Отделка",
   "Сантехника",
@@ -79,6 +76,9 @@ function mapApiOrder(dto: AvailableOrderDto): Order {
   const createdAt = Date.parse(dto.created_at);
   const deadlineTs = dto.date_to ? Date.parse(dto.date_to) : NaN;
 
+  // ✅ фотки: бэк теперь может отдавать photos, но тип на фронте мог ещё не обновиться
+  const photos = Array.isArray((dto as any).photos) ? ((dto as any).photos as string[]) : [];
+
   return {
     id: String(dto.id),
     title: dto.title,
@@ -89,7 +89,8 @@ function mapApiOrder(dto: AvailableOrderDto): Order {
     budgetValue,
     dates: formatDates(dto.date_from, dto.date_to),
     description: dto.description,
-    hasPhotos: !!dto.has_photos,
+    hasPhotos: photos.length > 0 || !!dto.has_photos,
+    photos,
     createdAt: Number.isNaN(createdAt) ? Date.now() : createdAt,
     deadlineWeight: Number.isNaN(deadlineTs)
       ? Number.MAX_SAFE_INTEGER
@@ -112,14 +113,12 @@ function OrderDetailsModal({
 }) {
   if (!open || !order) return null;
 
+  const cover = order.photos?.[0] ?? null;
+
   return (
     <>
-      {/* блюр фона */}
       <div
-        className="
-          fixed inset-0 z-[90]
-          bg-black/45 backdrop-blur-md
-        "
+        className="fixed inset-0 z-[90] bg-black/45 backdrop-blur-md"
         onClick={onClose}
       />
 
@@ -132,8 +131,6 @@ function OrderDetailsModal({
             shadow-[0_18px_50px_rgba(0,0,0,0.8)]
             px-5 pt-4 pb-5
             text-white
-            transform transition-all duration-200
-            opacity-100 translate-y-0 scale-100
           "
         >
           <div className="w-10 h-1 rounded-full bg-white/30 mx-auto mb-3" />
@@ -153,7 +150,6 @@ function OrderDetailsModal({
             </div>
           </div>
 
-          {/* категории */}
           <div className="flex flex-wrap gap-1.5 mb-3">
             {order.categories.map((cat) => (
               <span
@@ -161,7 +157,7 @@ function OrderDetailsModal({
                 className="
                   px-2.5 py-1 rounded-full text-[10px]
                   bg-cyan-500/25 border border-cyan-400/70
-                  text_white
+                  text-white
                 "
               >
                 {cat}
@@ -169,7 +165,6 @@ function OrderDetailsModal({
             ))}
           </div>
 
-          {/* бюджет + сроки */}
           <div className="grid grid-cols-2 gap-3 mb-3 text-[12px]">
             <div>
               <div className="text-blue-200/80 text-[11px]">Бюджет</div>
@@ -181,7 +176,6 @@ function OrderDetailsModal({
             </div>
           </div>
 
-          {/* описание + фото */}
           <div className="flex gap-3 mb-4">
             <p className="flex-1 text-[12px] text-blue-100 leading-snug">
               {order.description}
@@ -189,13 +183,22 @@ function OrderDetailsModal({
 
             <div
               className="
-                w-[70px] h-[70px] rounded-2xl overflow-hidden
+                w-[84px] h-[84px] rounded-2xl overflow-hidden
                 bg-gradient-to-br from-blue-500/50 via-cyan-400/60 to-blue-800/80
                 border border-white/20 flex items-center justify-center
-                text-[11px] text-white/90 text-center px-1.5
+                text-[11px] text-white/90 text-center
               "
             >
-              {order.hasPhotos ? "Фото приложены" : "Без фото"}
+              {cover ? (
+                <img
+                  src={cover}
+                  alt="Фото заказа"
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <span className="px-2">Без фото</span>
+              )}
             </div>
           </div>
 
@@ -290,7 +293,6 @@ export default function ExecutorOrders() {
     };
   }, []);
 
-  // 🔹 список уникальных городов из заказов (без пустых)
   const cities = useMemo(
     () =>
       Array.from(
@@ -299,7 +301,6 @@ export default function ExecutorOrders() {
     [orders]
   );
 
-  // 🔹 категории: если с бэка ничего не пришло — используем дефолтный список
   const allCategories = useMemo(() => {
     const fromOrders = Array.from(
       new Set(orders.flatMap((o) => o.categories ?? []))
@@ -322,15 +323,12 @@ export default function ExecutorOrders() {
     }
 
     list.sort((a, b) => {
-      if (sortMode === "recent") {
-        return b.createdAt - a.createdAt;
-      }
+      if (sortMode === "recent") return b.createdAt - a.createdAt;
       if (sortMode === "budget") {
         const av = a.budgetValue ?? 0;
         const bv = b.budgetValue ?? 0;
         return bv - av;
       }
-      // сортировка по срокам — сначала более "срочные"
       return a.deadlineWeight - b.deadlineWeight;
     });
 
@@ -405,7 +403,6 @@ export default function ExecutorOrders() {
       />
       <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[260px] h-[260px] rounded-full bg-cyan-400/25 blur-3xl z-0" />
 
-      {/* тост */}
       {toast && (
         <div
           className="
@@ -419,7 +416,6 @@ export default function ExecutorOrders() {
         </div>
       )}
 
-      {/* контент */}
       <div
         className={`
           relative z-10 flex flex-col px-5 pt-4 pb-6 min-h-screen
@@ -455,9 +451,7 @@ export default function ExecutorOrders() {
                   active:scale-[0.97] transition
                 "
               >
-                <div className="text-[10px] text-blue-200/80 mb-0.5">
-                  Город
-                </div>
+                <div className="text-[10px] text-blue-200/80 mb-0.5">Город</div>
                 <div className="text-[12px] font-medium">
                   {cityFilter ?? "Все города"}
                 </div>
@@ -537,127 +531,125 @@ export default function ExecutorOrders() {
             </div>
           )}
 
-          {filteredOrders.map((order) => (
-            <article
-              key={order.id}
-              className="
-                rounded-3xl bg-white/12 border border-white/20
-                backdrop-blur-2xl p-4
-                shadow-[0_0_30px_rgba(0,0,0,0.45)]
-                flex flex-col gap-3
-              "
-            >
-              {/* топ: категории + город */}
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex flex-wrap gap-1.5">
-                  {order.categories.map((cat) => (
-                    <span
-                      key={cat}
-                      className="
-                        px-2.5 py-1 rounded-full text-[10px]
-                        bg-cyan-500/25 border border-cyan-300/70
-                        text-white
-                      "
-                    >
-                      {cat}
-                    </span>
-                  ))}
-                </div>
-                <div className="text-[10px] text-blue-100 text-right">
-                  {order.city}
-                  <div className="text-[10px] text-blue-200/80">
-                    #{order.id}
+          {filteredOrders.map((order) => {
+            const cover = order.photos?.[0] ?? null;
+
+            return (
+              <article
+                key={order.id}
+                className="
+                  rounded-3xl bg-white/12 border border-white/20
+                  backdrop-blur-2xl p-4
+                  shadow-[0_0_30px_rgba(0,0,0,0.45)]
+                  flex flex-col gap-3
+                "
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {order.categories.map((cat) => (
+                      <span
+                        key={cat}
+                        className="
+                          px-2.5 py-1 rounded-full text-[10px]
+                          bg-cyan-500/25 border border-cyan-300/70
+                          text-white
+                        "
+                      >
+                        {cat}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-blue-100 text-right">
+                    {order.city}
+                    <div className="text-[10px] text-blue-200/80">#{order.id}</div>
                   </div>
                 </div>
-              </div>
 
-              {/* заголовок + адрес */}
-              <div>
-                <div className="text-sm font-semibold mb-1">{order.title}</div>
-                <div className="text-[11px] text-blue-100">
-                  {order.address}
+                <div>
+                  <div className="text-sm font-semibold mb-1">{order.title}</div>
+                  <div className="text-[11px] text-blue-100">{order.address}</div>
                 </div>
-              </div>
 
-              {/* бюджет + сроки */}
-              <div className="flex items-center justify-between gap-3 text-[11px]">
-                <div className="flex flex-col">
-                  <span className="text-blue-200/80">Бюджет</span>
-                  <span className="text-[12px] font-medium text-white">
-                    {order.budgetLabel}
-                  </span>
+                <div className="flex items-center justify-between gap-3 text-[11px]">
+                  <div className="flex flex-col">
+                    <span className="text-blue-200/80">Бюджет</span>
+                    <span className="text-[12px] font-medium text-white">
+                      {order.budgetLabel}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-blue-200/80">Сроки</span>
+                    <span className="text-[12px] text-blue-50">{order.dates}</span>
+                  </div>
                 </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-blue-200/80">Сроки</span>
-                  <span className="text-[12px] text-blue-50">
-                    {order.dates}
-                  </span>
+
+                <div className="flex gap-3">
+                  <p className="flex-1 text-[12px] text-blue-100 leading-snug">
+                    {order.description}
+                  </p>
+
+                  <div
+                    className="
+                      w-[64px] h-[64px] rounded-2xl overflow-hidden
+                      bg-gradient-to-br from-blue-500/50 via-cyan-400/60 to-blue-800/80
+                      border border-white/20 flex items-center justify-center
+                      text-[11px] text-white/90
+                    "
+                  >
+                    {cover ? (
+                      <img
+                        src={cover}
+                        alt="Фото заказа"
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span>Без фото</span>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              {/* описание + фото */}
-              <div className="flex gap-3">
-                <p className="flex-1 text-[12px] text-blue-100 leading-snug">
-                  {order.description}
-                </p>
+                <div className="mt-2 space-y-2">
+                  <Button
+                    className="w-full text-[13px] py-2.5"
+                    onClick={() => openReply(order)}
+                  >
+                    Откликнуться
+                  </Button>
 
-                <div
-                  className="
-                    w-[64px] h-[64px] rounded-2xl overflow-hidden
-                    bg-gradient-to-br from-blue-500/50 via-cyan-400/60 to-blue-800/80
-                    border border-white/20 flex items-center justify-center
-                    text-[11px] text-white/90
-                  "
-                >
-                  {order.hasPhotos ? "Фото +" : "Без фото"}
+                  <button
+                    type="button"
+                    className="
+                      w-full px-3 py-2.5 rounded-2xl text-[12px]
+                      bg-white/6 border border-white/22
+                      text-blue-50
+                      active:scale-[0.97] transition
+                    "
+                    onClick={() => {
+                      setSelectedOrder(order);
+                      setDetailsOpen(true);
+                    }}
+                  >
+                    Подробнее
+                  </button>
                 </div>
-              </div>
-
-              {/* кнопки */}
-              <div className="mt-2 space-y-2">
-                <Button
-                  className="w-full text-[13px] py-2.5"
-                  onClick={() => openReply(order)}
-                >
-                  Откликнуться
-                </Button>
-
-                <button
-                  type="button"
-                  className="
-                    w-full px-3 py-2.5 rounded-2xl text-[12px]
-                    bg-white/6 border border-white/22
-                    text-blue-50
-                    active:scale-[0.97] transition
-                  "
-                  onClick={() => {
-                    setSelectedOrder(order);
-                    setDetailsOpen(true);
-                  }}
-                >
-                  Подробнее
-                </button>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </div>
 
       {/* МОДАЛКА ГОРОДА */}
       <BottomSheet open={citySheetOpen} onClose={() => setCitySheetOpen(false)}>
         <div className="px-4 pt-3 pb-5 text-white">
-          <div className="w-10 h-1 rounded-full bg-white/40 mx_auto mb-3" />
+          <div className="w-10 h-1 rounded-full bg-white/40 mx-auto mb-3" />
           <div className="text-[13px] font-semibold mb-2">Выберите город</div>
 
           <button
             type="button"
             className={`
               w-full text-left px-3 py-2 rounded-2xl mb-1.5 text-[13px]
-              ${
-                !cityFilter
-                  ? "bg-white text-blue-900"
-                  : "bg-white/8 text-blue-50"
-              }
+              ${!cityFilter ? "bg-white text-blue-900" : "bg-white/8 text-blue-50"}
             `}
             onClick={() => {
               setCityFilter(null);
@@ -679,11 +671,7 @@ export default function ExecutorOrders() {
               type="button"
               className={`
                 w-full text-left px-3 py-2 rounded-2xl mb-1.5 text-[13px]
-                ${
-                  cityFilter === city
-                    ? "bg-white text-blue-900"
-                    : "bg-white/8 text-blue-50"
-                }
+                ${cityFilter === city ? "bg-white text-blue-900" : "bg-white/8 text-blue-50"}
               `}
               onClick={() => {
                 setCityFilter(city);
@@ -700,15 +688,7 @@ export default function ExecutorOrders() {
       <BottomSheet open={catSheetOpen} onClose={() => setCatSheetOpen(false)}>
         <div className="px-4 pt-3 pb-5 text-white">
           <div className="w-10 h-1 rounded-full bg-white/40 mx-auto mb-3" />
-          <div className="text-[13px] font-semibold mb-2">
-            Категории работ
-          </div>
-
-          {allCategories.length === 0 && (
-            <div className="text-[11px] text-blue-200/80 mb-3">
-              Категории не пришли с сервера, используем базовый набор.
-            </div>
-          )}
+          <div className="text-[13px] font-semibold mb-2">Категории работ</div>
 
           <div className="flex flex-wrap gap-2 mb-4">
             {allCategories.map((cat) => {
@@ -745,10 +725,7 @@ export default function ExecutorOrders() {
 
       {/* BOTTOM-SHEET ОТКЛИКА */}
       <BottomSheet open={!!replyOrder} onClose={closeReply}>
-        <form
-          onSubmit={handleSubmitReply}
-          className="px-4 pt-3 pb-5 text-white"
-        >
+        <form onSubmit={handleSubmitReply} className="px-4 pt-3 pb-5 text-white">
           <div className="w-10 h-1 rounded-full bg-white/40 mx-auto mb-3" />
 
           {replyOrder && (
@@ -765,39 +742,31 @@ export default function ExecutorOrders() {
                 </div>
               </div>
 
-              {/* цена */}
               <div className="mb-3">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[11px] text-blue-100">
-                    Ваша цена, ₽
-                  </span>
+                  <span className="text-[11px] text-blue-100">Ваша цена, ₽</span>
                   <span className="text-[10px] text-blue-200/80">
                     или отметьте «готов обсудить»
                   </span>
                 </div>
-                <div className="relative">
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    className={`
-                      w-full rounded-2xl bg-white/10 border border-white/25
-                      px-3 py-2.5 text-[13px] text-white
-                      outline-none placeholder:text-blue-200/60
-                      [appearance:textfield]
-                      [&::-webkit-outer-spin-button]:appearance-none
-                      [&::-webkit-inner-spin_button]:appearance-none
-                      ${
-                        discussPrice
-                          ? "opacity-60 cursor-not-allowed"
-                          : "opacity-100"
-                      }
-                    `}
-                    placeholder="Например, 30000"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    disabled={discussPrice}
-                  />
-                </div>
+
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  className={`
+                    w-full rounded-2xl bg-white/10 border border-white/25
+                    px-3 py-2.5 text-[13px] text-white
+                    outline-none placeholder:text-blue-200/60
+                    [appearance:textfield]
+                    [&::-webkit-outer-spin-button]:appearance-none
+                    [&::-webkit-inner-spin-button]:appearance-none
+                    ${discussPrice ? "opacity-60 cursor-not-allowed" : "opacity-100"}
+                  `}
+                  placeholder="Например, 30000"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  disabled={discussPrice}
+                />
 
                 <button
                   type="button"
@@ -815,26 +784,17 @@ export default function ExecutorOrders() {
                   <span
                     className={`
                       w-4 h-4 rounded-full border flex items-center justify-center
-                      ${
-                        discussPrice
-                          ? "border-emerald-200 bg-emerald-400"
-                          : "border-blue-200"
-                      }
+                      ${discussPrice ? "border-emerald-200 bg-emerald-400" : "border-blue-200"}
                     `}
                   >
-                    {discussPrice && (
-                      <span className="w-2 h-2 rounded-full bg-emerald-950" />
-                    )}
+                    {discussPrice && <span className="w-2 h-2 rounded-full bg-emerald-950" />}
                   </span>
                   Готов обсудить цену
                 </button>
               </div>
 
-              {/* комментарий */}
               <div className="mb-3">
-                <div className="mb-1 text-[11px] text-blue-100">
-                  Комментарий к отклику
-                </div>
+                <div className="mb-1 text-[11px] text-blue-100">Комментарий к отклику</div>
                 <textarea
                   rows={3}
                   className="
@@ -851,23 +811,13 @@ export default function ExecutorOrders() {
 
               <div className="mb-3 text-[10px] text-blue-200/80">
                 После отправки отклик попадёт в раздел{" "}
-                <span className="font-semibold text-blue-50">
-                  «Мои отклики»
-                </span>
-                , а заказчик получит уведомление в Telegram.
+                <span className="font-semibold text-blue-50">«Мои отклики»</span>, а заказчик получит уведомление в Telegram.
               </div>
 
               <Button
                 type="submit"
                 disabled={sending || !canSubmit}
-                className={`
-                  w-full text-[13px] py-2.5
-                  ${
-                    sending || !canSubmit
-                      ? "opacity-60 cursor-not-allowed"
-                      : ""
-                  }
-                `}
+                className={`w-full text-[13px] py-2.5 ${sending || !canSubmit ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 {sending ? "Отправляем..." : "Отправить отклик"}
               </Button>
@@ -876,15 +826,12 @@ export default function ExecutorOrders() {
         </form>
       </BottomSheet>
 
-      {/* МОДАЛКА ПОДРОБНЕЕ */}
       <OrderDetailsModal
         open={detailsOpen}
         order={selectedOrder}
         onClose={() => setDetailsOpen(false)}
         onReply={() => {
-          if (selectedOrder) {
-            openReply(selectedOrder);
-          }
+          if (selectedOrder) openReply(selectedOrder);
           setDetailsOpen(false);
         }}
       />
