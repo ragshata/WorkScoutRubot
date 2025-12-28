@@ -5,6 +5,12 @@ import { apiFetch } from "./http";
 export type BudgetType = "fixed" | "negotiable";
 export type OrderStatus = "active" | "in_progress" | "done" | "cancelled";
 
+/** Ответ аплоада фото */
+export interface UploadOrderPhotosResponse {
+  photos: string[];
+  has_photos: boolean;
+}
+
 /** Полный заказ из OrderOut (бэк) */
 export interface Order {
   id: number;
@@ -21,7 +27,10 @@ export interface Order {
   end_date: string | null;
 
   status: OrderStatus;
+
   has_photos: boolean;
+  photos: string[]; // ✅ ДОБАВИЛИ (OrderOut у тебя это отдаёт)
+
   created_at: string;
   executor_id: number | null;
 }
@@ -45,9 +54,7 @@ export interface CreateOrderPayload {
 }
 
 // createOrder идёт через apiFetch и НЕ шлёт customer_id бэку
-export async function createOrder(
-  payload: CreateOrderPayload
-): Promise<Order> {
+export async function createOrder(payload: CreateOrderPayload): Promise<Order> {
   const { customer_id, ...rest } = payload;
   return apiFetch("/orders/", {
     method: "POST",
@@ -140,9 +147,7 @@ export async function getChatLink(orderId: number): Promise<ChatLinkResponse> {
 }
 
 /** Показать контакты по заказу (POST /orders/{id}/show-contacts) */
-export async function showContacts(
-  orderId: number
-): Promise<ChatContactsResponse> {
+export async function showContacts(orderId: number): Promise<ChatContactsResponse> {
   return apiFetch(`/orders/${orderId}/show-contacts`, {
     method: "POST",
   });
@@ -165,7 +170,7 @@ export interface AvailableOrderDto {
   date_from: string | null;
   date_to: string | null;
   has_photos: boolean;
-  photos?: string[];
+  photos: string[]; // ✅
   created_at: string;
 }
 
@@ -173,12 +178,16 @@ export async function getAvailableOrders(): Promise<AvailableOrderDto[]> {
   return apiFetch<AvailableOrderDto[]>("/orders/all-active");
 }
 
-export async function uploadOrderPhotos(orderId: number, files: File[]) {
+/** Загрузка фото к заказу (POST /orders/{id}/photos) */
+export async function uploadOrderPhotos(
+  orderId: number,
+  files: File[]
+): Promise<UploadOrderPhotosResponse> {
   const form = new FormData();
   files.slice(0, 3).forEach((f) => form.append("files", f));
 
-  // ВАЖНО: apiFetch должен уметь FormData (не ставить JSON Content-Type)
-  return apiFetch(`/orders/${orderId}/photos`, {
+  // ВАЖНО: apiFetch должен уметь FormData (НЕ ставить JSON Content-Type вручную)
+  return apiFetch<UploadOrderPhotosResponse>(`/orders/${orderId}/photos`, {
     method: "POST",
     body: form as any,
   });

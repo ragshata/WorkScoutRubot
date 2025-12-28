@@ -1,7 +1,7 @@
 # bot/client.py
 
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, quote
 
 import requests
 
@@ -15,9 +15,6 @@ class TelegramBotClient:
         self.base_url = f"https://api.telegram.org/bot{token}"
 
     def send_message(self, chat_id: int, text: str, reply_markup: Optional[dict] = None):
-        """
-        Простая обёртка над sendMessage.
-        """
         payload: dict = {
             "chat_id": chat_id,
             "text": text,
@@ -34,48 +31,76 @@ class TelegramBotClient:
                 timeout=5,
             )
         except Exception:
-            # В проде сюда можно повесить логгер, сейчас просто молча игнорим
             pass
 
-    # ===== УМНЫЕ ССЫЛКИ ДЛЯ WEBAPP =====
+    # ===== WEBAPP LINKS =====
 
     @staticmethod
     def _sanitize_start_param(value: str) -> str:
         """
-        start_param по правилам Telegram: разрешены A-Z a-z 0-9 _ -
-        На всякий случай URL-энкодим и режем до лимита.
+        Telegram startapp payload: лучше держаться коротких и безопасных значений.
+        На практике лимит у start/startapp в Telegram маленький, поэтому режем до 64.
+        Разрешаем A-Z a-z 0-9 _ -
+        Остальное кодируем.
         """
         if not value:
             return ""
-        value = value.strip()[:512]
-        # сохраняем только безопасные символы (остальное уйдёт в percent-encoding)
+        value = value.strip()[:64]
         return quote(value, safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
 
-    def _build_startapp_link(self, start_param: str) -> str:
+    @staticmethod
+    def _normalize_webapp_base(raw: str) -> str:
         """
-        Строим ссылку, которая открывает мини-апп бота с нужным startapp/startApp параметром.
+        Делает WEBAPP_BASE_URL устойчивым к кривым значениям типа:
+        - https://t.me/Bot/app?startapp=open
+        - https://t.me/Bot?startapp=open
+        - https://t.me/Bot/app
+        Превращает это в базу без /app и без startapp/startApp.
+        """
+        s = (raw or "").strip()
+        if not s:
+            return ""
 
-        Приоритет:
-        1) WEBAPP_BASE_URL из env (если задан) — используем как базу и добавляем startapp
-           (полезно, если ты явно хочешь управлять base-ссылкой)
-        2) https://t.me/<BOT_USERNAME>?startapp=...&startApp=...
-        """
+        parts = urlsplit(s)
+
+        # убираем /app в конце пути, потому что у тебя работает без него
+        path = parts.path or ""
+        if path.rstrip("/").endswith("/app"):
+            path = path.rstrip("/")
+            path = path[: -len("/app")] or ""
+
+        # чистим query от startapp/startApp/start
+        q = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+             if k not in ("startapp", "startApp", "start")]
+
+        clean_query = urlencode(q, doseq=True)
+
+        return urlunsplit((parts.scheme, parts.netloc, path, clean_query, ""))
+
+    def _build_startapp_link(self, start_param: str) -> str:
         sp = self._sanitize_start_param(start_param)
         if not sp:
             return ""
 
-        # 1) Если задан WEBAPP_BASE_URL — используем его как базу
-        #    (например, если ты хочешь спец-ссылку вида https://t.me/WorkScoutRubot?startapp=...)
-        if WEBAPP_BASE_URL:
-            sep = "&" if "?" in WEBAPP_BASE_URL else "?"
-            # дублируем для совместимости разных клиентов
-            return f"{WEBAPP_BASE_URL}{sep}startapp={sp}&startApp={sp}"
+        # 1) base из env, но нормализованный (без /app и без startapp в query)
+        base = self._normalize_webapp_base(WEBAPP_BASE_URL) if WEBAPP_BASE_URL else ""
 
-        # 2) Стандартный deep-link на бота (рабочий у тебя формат)
-        if TELEGRAM_BOT_USERNAME:
-            return f"https://t.me/{TELEGRAM_BOT_USERNAME}?startapp={sp}&startApp={sp}"
+        # 2) иначе стандартный deep-link на бота
+        if not base and TELEGRAM_BOT_USERNAME:
+            base = f"https://t.me/{TELEGRAM_BOT_USERNAME}"
 
-        return ""
+        if not base:
+            return ""
+
+        parts = urlsplit(base)
+        q = parse_qsl(parts.query, keep_blank_values=True)
+
+        # гарантированно ставим startapp, даже если кто-то пытался подсунуть другое
+        q = [(k, v) for (k, v) in q if k not in ("startapp", "startApp", "start")]
+        q.append(("startapp", sp))
+
+        final_query = urlencode(q, doseq=True)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, final_query, ""))
 
     def build_order_link(self, order_id: int) -> str:
         return self._build_startapp_link(f"order_{order_id}")
@@ -91,10 +116,6 @@ _bot_instance: Optional[TelegramBotClient] = None
 
 
 def get_bot() -> Optional[TelegramBotClient]:
-    """
-    Ленивая инициализация клиента.
-    Если токен не задан — вернём None и уведомления просто не будут отправляться.
-    """
     global _bot_instance
     if _bot_instance is not None:
         return _bot_instance
