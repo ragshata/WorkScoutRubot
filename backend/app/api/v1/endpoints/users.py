@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from backend.app.services.telegram_avatar import sync_user_avatar_if_needed
+from app.services.telegram_avatar import sync_user_avatar_if_needed
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
