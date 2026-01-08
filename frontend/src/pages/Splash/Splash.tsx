@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+function getStartParam(): string | null {
+  const tg = (window as any)?.Telegram?.WebApp;
+  const fromTg = tg?.initDataUnsafe?.start_param;
+  if (typeof fromTg === "string" && fromTg.trim()) return fromTg.trim();
+
+  const qs = new URLSearchParams(window.location.search);
+  const fromUrl = qs.get("startapp") || qs.get("startApp") || qs.get("start_param");
+  return fromUrl && fromUrl.trim() ? fromUrl.trim() : null;
+}
+
 export default function Splash() {
   const navigate = useNavigate();
 
@@ -12,35 +22,40 @@ export default function Splash() {
   const [parallax, setParallax] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
-    // таймлайн по ходу пути
-    const t1 = setTimeout(() => setShowBudget(true), 600);   // первый узел
-    const t2 = setTimeout(() => setShowDeadline(true), 900); // второй
-    const t3 = setTimeout(() => setShowWorkType(true), 1200);// третий
-    const t4 = setTimeout(() => setShowCheck(true), 1600);   // галочка у исполнителя
-    const t5 = setTimeout(() => setFadeOut(true), 2500);     // затухание сцены
-    const t6 = setTimeout(() => navigate("/role"), 3300);    // переход
+    const hasDeepLink = !!getStartParam();
 
     // параллакс сетки (телефон + мышь)
     const handleOrientation = (e: DeviceOrientationEvent) => {
       const x = e.gamma ?? 0;
       const y = e.beta ?? 0;
-      setParallax({
-        x: x / 40,
-        y: y / 40,
-      });
+      setParallax({ x: x / 40, y: y / 40 });
     };
 
     const handleMouse = (e: MouseEvent) => {
       const xr = (e.clientX / window.innerWidth) * 2 - 1;
       const yr = (e.clientY / window.innerHeight) * 2 - 1;
-      setParallax({
-        x: xr * 0.6,
-        y: yr * 0.6,
-      });
+      setParallax({ x: xr * 0.6, y: yr * 0.6 });
     };
 
     window.addEventListener("deviceorientation", handleOrientation);
     window.addEventListener("mousemove", handleMouse);
+
+    // Если пришли через startapp/start_param, навигацию делает StartParamRouter.
+    // Тут не надо через 3 секунды уезжать на /role и ломать deep-link.
+    if (hasDeepLink) {
+      return () => {
+        window.removeEventListener("deviceorientation", handleOrientation);
+        window.removeEventListener("mousemove", handleMouse);
+      };
+    }
+
+    // таймлайн по ходу пути
+    const t1 = setTimeout(() => setShowBudget(true), 600); // первый узел
+    const t2 = setTimeout(() => setShowDeadline(true), 900); // второй
+    const t3 = setTimeout(() => setShowWorkType(true), 1200); // третий
+    const t4 = setTimeout(() => setShowCheck(true), 1600); // галочка у исполнителя
+    const t5 = setTimeout(() => setFadeOut(true), 2500); // затухание сцены
+    const t6 = setTimeout(() => navigate("/role"), 3300); // переход
 
     return () => {
       clearTimeout(t1);
@@ -77,7 +92,7 @@ export default function Splash() {
         {/* Логотип / текст */}
         <div className="mb-10 text-center">
           <h1 className="text-3xl font-extrabold tracking-wide drop-shadow-[0_0_24px_rgba(0,200,255,0.8)]">
-            Работа Плюс
+            Workscout
           </h1>
           <p className="mt-2 text-xs text-blue-100 tracking-wide">
             Путь от заказа до исполнителя — за секунды
@@ -88,9 +103,7 @@ export default function Splash() {
         <div className="w-full max-w-md flex items-center justify-between gap-3">
           {/* Заказчик слева */}
           <div className="flex flex-col items-center gap-1">
-            <div className="endpoint-circle">
-              🧑‍💼
-            </div>
+            <div className="endpoint-circle">🧑‍💼</div>
             <span className="text-[11px] text-blue-100">Заказчик</span>
           </div>
 
@@ -98,20 +111,10 @@ export default function Splash() {
           <div className="flex-1">
             <div className="relative w-full h-28">
               {/* основная линия */}
-              <svg
-                className="absolute inset-0 w-full h-full"
-                viewBox="0 0 320 120"
-                preserveAspectRatio="none"
-              >
-                <polyline
-                  className="path-line"
-                  points="10,80 70,40 130,60 190,30 250,55 310,35"
-                />
+              <svg className="absolute inset-0 w-full h-full" viewBox="0 0 320 120" preserveAspectRatio="none">
+                <polyline className="path-line" points="10,80 70,40 130,60 190,30 250,55 310,35" />
                 {/* огоньки, бегущие по пути */}
-                <polyline
-                  className="path-lights"
-                  points="10,80 70,40 130,60 190,30 250,55 310,35"
-                />
+                <polyline className="path-lights" points="10,80 70,40 130,60 190,30 250,55 310,35" />
               </svg>
 
               {/* Узлы: бюджет, сроки, вид работ */}
@@ -132,7 +135,7 @@ export default function Splash() {
                 `}
                 style={{ left: "48%", top: "55%" }}
               >
-                ⏱ Сроки
+                ⏱️ Сроки
               </div>
 
               <div
@@ -151,11 +154,7 @@ export default function Splash() {
           <div className="flex flex-col items-center gap-1">
             <div className="endpoint-circle relative">
               👷
-              {showCheck && (
-                <span className="absolute -bottom-1 -right-1 text-[14px]">
-                  ✅
-                </span>
-              )}
+              {showCheck && <span className="absolute -bottom-1 -right-1 text-[14px]">✅</span>}
             </div>
             <span className="text-[11px] text-blue-100">Исполнитель</span>
           </div>

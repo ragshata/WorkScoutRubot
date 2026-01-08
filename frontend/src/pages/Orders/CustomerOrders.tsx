@@ -1,7 +1,7 @@
 // src/pages/Orders/CustomerOrders.tsx
 
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import Page from "../../components/layout/Page";
 import Button from "../../components/ui/Button";
 import BottomSheet from "../../components/ui/BottomSheet";
@@ -9,6 +9,7 @@ import {
   type Order,
   type OrderStatus,
   getCustomerOrders,
+  getOrderById,
   deleteOrder,
   completeOrder,
   getChatLink,
@@ -22,6 +23,14 @@ type Tab = "active" | "history";
 type ContactsModalState = ChatContactsResponse & {
   orderTitle: string;
 };
+
+/* ---------- deep-link helpers ---------- */
+
+function parseOpenOrderId(value: string | null): number | null {
+  if (!value) return null;
+  const n = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 /* ---------- хелперы форматирования ---------- */
 
@@ -87,6 +96,19 @@ function getStatusClass(s: OrderStatus): string {
 
 export default function CustomerOrders() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  // поддержка deep-link: /customer/orders?open=order_12 или ?open=12
+  const openRaw = searchParams.get("open") ?? searchParams.get("order") ?? null;
+  const openOrderId = useMemo(() => parseOpenOrderId(openRaw), [openRaw]);
+
+  // скролл к заказу + подсветка карточки
+  // article -> HTMLElement, не div. Типизируем широко, чтобы TS не истерил.
+  const orderRefs = useRef<Record<number, HTMLElement | null>>({});
+  const scrollAttemptsRef = useRef(0);
+  const [highlightOrderId, setHighlightOrderId] = useState<number | null>(null);
+  const [scrollToOrderId, setScrollToOrderId] = useState<number | null>(null);
 
   const [animate, setAnimate] = useState(false);
   const [tab, setTab] = useState<Tab>("active");
@@ -144,6 +166,66 @@ export default function CustomerOrders() {
       cancelled = true;
     };
   }, []);
+  // --- deep-link: открыть/подсветить конкретный заказ по query ---
+  useEffect(() => {
+    if (!openOrderId) return;
+    if (loading) return;
+
+    const existing = orders.find((o) => o.id === openOrderId);
+
+    // если заказа нет в списке (например, пагинация/фильтры/обновление) — попробуем добрать по id
+    if (!existing) {
+      (async () => {
+        try {
+          const one = await getOrderById(openOrderId);
+          setOrders((prev) =>
+            prev.some((p) => p.id === one.id) ? prev : [one, ...prev]
+          );
+        } catch {
+          // молча игнорируем: либо не ваш заказ, либо не существует
+        }
+      })();
+      return;
+    }
+
+    const targetTab: Tab =
+      existing.status === "active" || existing.status === "in_progress"
+        ? "active"
+        : "history";
+
+    if (tab !== targetTab) setTab(targetTab);
+    setScrollToOrderId(openOrderId);
+  }, [openOrderId, loading, orders, tab]);
+
+  useEffect(() => {
+    if (!scrollToOrderId) return;
+
+    const el = orderRefs.current[scrollToOrderId];
+
+    if (!el) {
+      if (scrollAttemptsRef.current < 12) {
+        scrollAttemptsRef.current += 1;
+        const t = setTimeout(() => setScrollToOrderId(scrollToOrderId), 80);
+        return () => clearTimeout(t);
+      }
+      scrollAttemptsRef.current = 0;
+      setScrollToOrderId(null);
+      return;
+    }
+
+    scrollAttemptsRef.current = 0;
+
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    setHighlightOrderId(scrollToOrderId);
+
+    // убираем query, чтобы при обновлении не прыгало снова
+    navigate({ pathname: location.pathname, search: "" }, { replace: true });
+
+    const t = setTimeout(() => setHighlightOrderId(null), 2200);
+    setScrollToOrderId(null);
+    return () => clearTimeout(t);
+  }, [scrollToOrderId, navigate, location.pathname]);
+
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -452,12 +534,20 @@ export default function CustomerOrders() {
               return (
                 <article
                   key={order.id}
-                  className="
+                  ref={(el) => {
+                    orderRefs.current[order.id] = el;
+                  }}
+                  className={`
                     rounded-3xl bg-white/12 border border-white/20
                     backdrop-blur-2xl p-4
                     shadow-[0_0_30px_rgba(0,0,0,0.45)]
                     flex flex-col gap-3
-                  "
+                    ${
+                      highlightOrderId === order.id
+                        ? "ring-2 ring-cyan-300/90 shadow-[0_0_40px_rgba(34,211,238,0.55)]"
+                        : ""
+                    }
+                  `}
                 >
                   {/* верх: категории + статус */}
                   <div className="flex items-start justify-between gap-2">

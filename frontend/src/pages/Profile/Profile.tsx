@@ -31,6 +31,31 @@ const EXECUTOR_SKILLS = [
   "Монтажник",
 ];
 
+function isAbsoluteUrl(url: string): boolean {
+  return (
+    /^https?:\/\//i.test(url) ||
+    url.startsWith("data:") ||
+    url.startsWith("blob:")
+  );
+}
+
+function normalizeMediaUrl(url: string, cacheKey?: string | null): string {
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+
+  const base = isAbsoluteUrl(trimmed)
+    ? trimmed
+    : trimmed.startsWith("/")
+    ? `${window.location.origin}${trimmed}`
+    : `${window.location.origin}/${trimmed}`;
+
+  if (!cacheKey) return base;
+
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}v=${encodeURIComponent(cacheKey)}`;
+}
+
+
 function statusFromBackend(value?: string | null): CustomerStatus {
   if (!value) return "person";
   const v = value.toLowerCase();
@@ -42,6 +67,7 @@ function statusFromBackend(value?: string | null): CustomerStatus {
 // Расширяем UserDto мягко, чтобы фронт не падал, пока бэк не готов.
 type UserWithStats = UserDto & {
   avatar_url?: string | null;
+  avatar_updated_at?: string | null;
   photo_url?: string | null;
   rating?: number | null;
   reviews_count?: number | null;
@@ -59,6 +85,9 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const [avatarNonce] = useState(() => String(Date.now()));
+
 
   // общие поля
   const [name, setName] = useState("");
@@ -101,6 +130,7 @@ export default function Profile() {
         if (cancelled) return;
 
         setUser(me);
+        setAvatarFailed(false);
 
         const fullName = [me.first_name, me.last_name].filter(Boolean).join(" ");
         setName(fullName || "");
@@ -214,10 +244,28 @@ export default function Profile() {
       ? user.orders_count
       : null;
 
-  const avatarUrl =
+  const avatarUrlRaw =
     (typeof user?.avatar_url === "string" && user.avatar_url) ||
     (typeof user?.photo_url === "string" && user.photo_url) ||
     null;
+
+  const avatarCacheKey =
+    (typeof user?.avatar_updated_at === "string" && user.avatar_updated_at) ||
+    avatarNonce;
+
+  const avatarUrl =
+    avatarUrlRaw ? normalizeMediaUrl(avatarUrlRaw, avatarCacheKey) : null;
+
+  const initials =
+    displayName !== "—"
+      ? displayName
+          .split(" ")
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((w) => w[0]?.toUpperCase())
+          .join("")
+      : "";
+
 
   return (
     <Page>
@@ -298,17 +346,27 @@ export default function Profile() {
                 "
               >
                 <div className="w-14 h-14 rounded-full bg-white/20 overflow-hidden flex items-center justify-center">
-                  {avatarUrl ? (
+
+                  {avatarUrl && !avatarFailed ? (
                     <img
+                      key={avatarUrl}
                       src={avatarUrl}
                       alt="avatar"
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
+                      loading="lazy"
+                      decoding="async"
+                      onError={() => setAvatarFailed(true)}
                     />
+                  ) : initials ? (
+                    <div className="text-[16px] font-semibold text-white/90">
+                      {initials}
+                    </div>
                   ) : (
                     <div className="text-3xl">{isExecutor ? "👷" : "🧑‍💼"}</div>
                   )}
-                </div>
+
+</div>
 
                 <div className="flex-1">
                   <div className="text-sm font-semibold">{displayName}</div>

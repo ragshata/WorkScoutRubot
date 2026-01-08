@@ -15,11 +15,13 @@ import AdminDashboard from "../pages/Admin/AdminDashboard";
 import BlockedPage from "../pages/Auth/Blocked";
 
 import TelegramBackButtonManager from "../components/telegram/TelegramBackButtonManager";
+import StartParamRouter from "../components/telegram/StartParamRouter";
 
 export default function AppRoutes() {
   return (
     <>
       <TelegramBackButtonManager />
+      <StartParamRouter/>
 
       <Routes>
         {/* Стартовая страница обязательно должна быть Splash */}
